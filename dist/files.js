@@ -45,9 +45,14 @@ export class FilesService {
      * ReadableStream, or a string.
      */
     async put(path, body, opts) {
+        const headers = {};
+        if (opts?.ifNoneMatch)
+            headers["If-None-Match"] = "*";
+        if (opts?.ifMatch)
+            headers["If-Match"] = `"${opts.ifMatch.replace(/"/g, "")}"`;
         return this.transport.putBytes(pathToURL(this.base, path), body, {
             contentType: opts?.contentType,
-            headers: opts?.ifNoneMatch ? { "If-None-Match": "*" } : undefined,
+            headers: Object.keys(headers).length ? headers : undefined,
             signal: opts?.signal,
         });
     }
@@ -65,8 +70,39 @@ export class FilesService {
      * `.url` directly instead — that's a stable public URL with no token.
      */
     async get(path, init) {
-        const { data, contentType } = await this.transport.getRaw(pathToURL(this.base, path), init);
-        return new Blob([new Uint8Array(data)], { type: contentType || "application/octet-stream" });
+        return (await this.read(path, init)).blob;
+    }
+    /**
+     * Like `get`, but also returns the ETag of the bytes, so a later
+     * `put(path, body, { ifMatch: etag })` writes only if the file is
+     * still the version that was read.
+     */
+    async read(path, init) {
+        const { data, contentType, etag } = await this.transport.getRaw(pathToURL(this.base, path), init);
+        return {
+            blob: new Blob([new Uint8Array(data)], { type: contentType || "application/octet-stream" }),
+            contentType,
+            etag,
+        };
+    }
+    /**
+     * Read a JSON file and its version in one call. A missing file is
+     * `{ value: undefined, etag: undefined }`, so a first save can pass
+     * `ifNoneMatch: true` and a later one `ifMatch: etag`.
+     */
+    async readJSON(path, init) {
+        let r;
+        try {
+            r = await this.read(path, init);
+        }
+        catch (e) {
+            if (e?.statusCode === 404 ||
+                e?.status === 404) {
+                return { value: undefined, etag: undefined };
+            }
+            throw e;
+        }
+        return { value: JSON.parse(await r.blob.text()), etag: r.etag };
     }
     /** Stat: HEAD-only object metadata. */
     async stat(path, init) {
@@ -141,6 +177,7 @@ export class FilesService {
             src_url: srcURL,
             content_type: opts?.contentType,
             if_none_match: opts?.ifNoneMatch,
+            if_match: opts?.ifMatch,
         }, opts?.signal ? { signal: opts.signal } : undefined);
     }
     /**

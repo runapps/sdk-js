@@ -28,7 +28,22 @@ export interface PutOptions {
   contentType?: string;
   /** Refuse to overwrite an existing object (gateway returns 409). */
   ifNoneMatch?: boolean;
+  /**
+   * Write only if the stored object still has this ETag — the one
+   * `read()` / `stat()` / a previous `put()` returned. Someone else
+   * having written in between makes the gateway answer 412 instead
+   * of silently overwriting their version; re-read, merge, put again.
+   */
+  ifMatch?: string;
   signal?: AbortSignal;
+}
+
+/** The bytes at a path together with the version they are. */
+export interface FileRead {
+  blob: Blob;
+  contentType: string;
+  /** Pass back as `ifMatch` to write only if nobody else has since. */
+  etag?: string;
 }
 
 export interface ListOptions {
@@ -59,11 +74,12 @@ export interface ListOptions {
 export interface PutFromURLOptions {
   contentType?: string;
   ifNoneMatch?: boolean;
+  ifMatch?: string;
   signal?: AbortSignal;
 }
 
 export type BatchOp =
-  | { op: "put_url"; path: string; src_url: string; content_type?: string; if_none_match?: boolean }
+  | { op: "put_url"; path: string; src_url: string; content_type?: string; if_none_match?: boolean; if_match?: string }
   | { op: "del"; path: string }
   | { op: "move"; from: string; to: string }
   | { op: "copy"; from: string; to: string }
@@ -124,9 +140,12 @@ export class FilesService {
     body: BodyInit,
     opts?: PutOptions,
   ): Promise<FileObject> {
+    const headers: Record<string, string> = {};
+    if (opts?.ifNoneMatch) headers["If-None-Match"] = "*";
+    if (opts?.ifMatch) headers["If-Match"] = `"${opts.ifMatch.replace(/"/g, "")}"`;
     return this.transport.putBytes<FileObject>(pathToURL(this.base, path), body, {
       contentType: opts?.contentType,
-      headers: opts?.ifNoneMatch ? { "If-None-Match": "*" } : undefined,
+      headers: Object.keys(headers).length ? headers : undefined,
       signal: opts?.signal,
     });
   }
@@ -150,8 +169,43 @@ export class FilesService {
    * `.url` directly instead — that's a stable public URL with no token.
    */
   async get(path: string, init?: { signal?: AbortSignal }): Promise<Blob> {
-    const { data, contentType } = await this.transport.getRaw(pathToURL(this.base, path), init);
-    return new Blob([new Uint8Array(data)], { type: contentType || "application/octet-stream" });
+    return (await this.read(path, init)).blob;
+  }
+
+  /**
+   * Like `get`, but also returns the ETag of the bytes, so a later
+   * `put(path, body, { ifMatch: etag })` writes only if the file is
+   * still the version that was read.
+   */
+  async read(path: string, init?: { signal?: AbortSignal }): Promise<FileRead> {
+    const { data, contentType, etag } = await this.transport.getRaw(pathToURL(this.base, path), init);
+    return {
+      blob: new Blob([new Uint8Array(data)], { type: contentType || "application/octet-stream" }),
+      contentType,
+      etag,
+    };
+  }
+
+  /**
+   * Read a JSON file and its version in one call. A missing file is
+   * `{ value: undefined, etag: undefined }`, so a first save can pass
+   * `ifNoneMatch: true` and a later one `ifMatch: etag`.
+   */
+  async readJSON<T = unknown>(
+    path: string,
+    init?: { signal?: AbortSignal },
+  ): Promise<{ value: T | undefined; etag?: string }> {
+    let r: FileRead;
+    try {
+      r = await this.read(path, init);
+    } catch (e) {
+      if ((e as { statusCode?: number; status?: number })?.statusCode === 404 ||
+          (e as { statusCode?: number; status?: number })?.status === 404) {
+        return { value: undefined, etag: undefined };
+      }
+      throw e;
+    }
+    return { value: JSON.parse(await r.blob.text()) as T, etag: r.etag };
   }
 
   /** Stat: HEAD-only object metadata. */
@@ -246,6 +300,7 @@ export class FilesService {
         src_url: srcURL,
         content_type: opts?.contentType,
         if_none_match: opts?.ifNoneMatch,
+        if_match: opts?.ifMatch,
       },
       opts?.signal ? { signal: opts.signal } : undefined,
     );

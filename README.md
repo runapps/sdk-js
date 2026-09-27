@@ -497,6 +497,16 @@ await client.files.putFromURL("cache/cat.jpg", "https://example.com/cat.jpg");
 
 // Read.
 const blob = await client.files.get("assets/logo.png");           // returns Blob
+
+// Read-modify-write without losing someone else's write: the ETag from
+// read() says which version you saw, and ifMatch makes the put fail
+// (412) if the file has changed since — re-read, merge, try again.
+const { value, etag } = await client.files.readJSON<{ score: number }>("state.json");
+const next = { ...(value ?? { score: 0 }), score: (value?.score ?? 0) + 1 };
+await client.files.put("state.json", JSON.stringify(next), {
+  contentType: "application/json",
+  ...(etag ? { ifMatch: etag } : { ifNoneMatch: true }),
+});
 const url = URL.createObjectURL(blob);                            // temp local URL
 
 // Metadata only (HEAD).

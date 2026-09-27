@@ -16,7 +16,21 @@ export interface PutOptions {
     contentType?: string;
     /** Refuse to overwrite an existing object (gateway returns 409). */
     ifNoneMatch?: boolean;
+    /**
+     * Write only if the stored object still has this ETag — the one
+     * `read()` / `stat()` / a previous `put()` returned. Someone else
+     * having written in between makes the gateway answer 412 instead
+     * of silently overwriting their version; re-read, merge, put again.
+     */
+    ifMatch?: string;
     signal?: AbortSignal;
+}
+/** The bytes at a path together with the version they are. */
+export interface FileRead {
+    blob: Blob;
+    contentType: string;
+    /** Pass back as `ifMatch` to write only if nobody else has since. */
+    etag?: string;
 }
 export interface ListOptions {
     prefix?: string;
@@ -45,6 +59,7 @@ export interface ListOptions {
 export interface PutFromURLOptions {
     contentType?: string;
     ifNoneMatch?: boolean;
+    ifMatch?: string;
     signal?: AbortSignal;
 }
 export type BatchOp = {
@@ -53,6 +68,7 @@ export type BatchOp = {
     src_url: string;
     content_type?: string;
     if_none_match?: boolean;
+    if_match?: string;
 } | {
     op: "del";
     path: string;
@@ -118,6 +134,25 @@ export declare class FilesService {
     get(path: string, init?: {
         signal?: AbortSignal;
     }): Promise<Blob>;
+    /**
+     * Like `get`, but also returns the ETag of the bytes, so a later
+     * `put(path, body, { ifMatch: etag })` writes only if the file is
+     * still the version that was read.
+     */
+    read(path: string, init?: {
+        signal?: AbortSignal;
+    }): Promise<FileRead>;
+    /**
+     * Read a JSON file and its version in one call. A missing file is
+     * `{ value: undefined, etag: undefined }`, so a first save can pass
+     * `ifNoneMatch: true` and a later one `ifMatch: etag`.
+     */
+    readJSON<T = unknown>(path: string, init?: {
+        signal?: AbortSignal;
+    }): Promise<{
+        value: T | undefined;
+        etag?: string;
+    }>;
     /** Stat: HEAD-only object metadata. */
     stat(path: string, init?: {
         signal?: AbortSignal;

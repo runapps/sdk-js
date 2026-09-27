@@ -92,7 +92,8 @@ export class Transport {
         }
         return (await resp.json());
     }
-    /** GET path; return raw bytes + content-type (for video/audio downloads). */
+    /** GET path; return raw bytes + content-type (for video/audio downloads)
+     *  and the ETag of those bytes, when the server sends one. */
     async getRaw(path, init) {
         const resp = await this.fetchWithAuthRetry(path, async () => ({
             method: "GET",
@@ -104,7 +105,8 @@ export class Transport {
         }
         const buf = new Uint8Array(await resp.arrayBuffer());
         const contentType = resp.headers.get("content-type") ?? "";
-        return { data: buf, contentType };
+        const etag = (resp.headers.get("etag") ?? "").replace(/"/g, "") || undefined;
+        return { data: buf, contentType, etag };
     }
     /** POST a multipart/form-data body. Used by audio.transcribe and image.edit. */
     async postMultipart(path, form, init) {

@@ -73,12 +73,14 @@ export declare class Transport {
     getJSON<T>(path: string, init?: {
         signal?: AbortSignal;
     }): Promise<T>;
-    /** GET path; return raw bytes + content-type (for video/audio downloads). */
+    /** GET path; return raw bytes + content-type (for video/audio downloads)
+     *  and the ETag of those bytes, when the server sends one. */
     getRaw(path: string, init?: {
         signal?: AbortSignal;
     }): Promise<{
         data: Uint8Array;
         contentType: string;
+        etag?: string;
     }>;
     /** POST a multipart/form-data body. Used by audio.transcribe and image.edit. */
     postMultipart<T>(path: string, form: FormData, init?: {
