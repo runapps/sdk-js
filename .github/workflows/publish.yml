@@ -21,10 +21,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # No registry-url here: that option writes a placeholder auth token
+      # into .npmrc, and npm would use it instead of the OIDC exchange.
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          registry-url: https://registry.npmjs.org
       # Trusted publishing needs npm 11.5.1+; the runner's bundled npm
       # may be older.
       - run: npm install -g npm@latest
