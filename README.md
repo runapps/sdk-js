@@ -105,9 +105,7 @@ client.auth?.onTokenChange(t => {}); // subscribe to (re)acquisition
 client.auth?.hasFreshToken();        // bool — avoids unnecessary "sign in" UI
 ```
 
-**`project`** — pin the grant to a project regardless of where the bundle is served from. Required for `client.files.*` on origins not registered as `(origin, app)` pairs (e.g. `localhost:5173` during dev).
-
-**Iframe mode** — when embedded under the runjobs dashboard, the SDK first attempts a silent `postMessage` handshake with the parent before falling back to redirect-grant.
+**`project`** — pin the grant to a project regardless of where the bundle is served from. Required for `client.files.*` on origins not registered as `(origin, app)` pairs (e.g. `localhost:5173` during dev), and when the client runs on a personal API key (`apiKey: "rk_…"`): a personal key has no app of its own, so `project` names the app whose files to work on — you get your own files in that app, the same ones the app sees for you, provided you have added the app or created it.
 
 In Node / non-window environments, the `runjobs` provider is a no-op — fall back to `apiKey` / `apiKeyResolver`.
 
