@@ -1,0 +1,41 @@
+# Publishes @runjobsai/sdk to npm on a version tag (v0.1.2 → 0.1.2).
+#
+# Auth is npm trusted publishing: npm trusts this repository's workflow
+# through GitHub's OIDC token, so there is no npm token or 2FA code in
+# the repo or its secrets, and every release carries a provenance
+# attestation linking it to the commit it was built from. The publisher
+# is registered on npmjs.com under the package's settings — owner
+# `runjobsai`, repository `sdk-js`, workflow `publish.yml`.
+name: publish
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  id-token: write # the OIDC token npm exchanges for publish rights
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      # Trusted publishing needs npm 11.5.1+; the runner's bundled npm
+      # may be older.
+      - run: npm install -g npm@latest
+      - run: npm ci
+      # The tag names the version; refuse to publish anything else, so a
+      # tag pushed against a stale package.json fails loudly instead of
+      # shipping the wrong number.
+      - name: tag matches package.json
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(node -p "require('./package.json').version")"
+          [ "$tag" = "$pkg" ] || { echo "tag v$tag but package.json says $pkg"; exit 1; }
+      - run: npm test
+      - run: npm publish --access public
