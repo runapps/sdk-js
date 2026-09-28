@@ -17,4 +17,10 @@ export default defineConfig({
   target: "es2020",
   platform: "browser",
   outExtension: () => ({ js: ".umd.js" }),
+  // The IIFE leaves `RunJobs` as the module namespace, so a script-tag
+  // user writing `new RunJobs({...})` — the form every doc shows — got
+  // "not a constructor". Make the global the client class itself, with
+  // the namespace's exports hung on it, so both `new RunJobs(...)` and
+  // `new RunJobs.Client(...)` work.
+  footer: { js: "RunJobs = Object.assign(RunJobs.Client, RunJobs);" },
 });

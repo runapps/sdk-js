@@ -146,3 +146,6 @@ export type {
   EmbeddingsUsage,
   EmbeddingsResponse,
 } from "./embeddings.js";
+
+// Server-tool names for chat.create({ server_tools }), with autocomplete.
+export { ServerTools, type ServerToolName } from "./chat.js";

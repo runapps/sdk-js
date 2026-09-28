@@ -21,4 +21,6 @@ export { getOptionsSchema, acceptsField, requiresField, allowedValuesFor, } from
 export { validateRequest } from "./validate.js";
 // Media helpers (shared by image + video + chat-multimodal)
 export { encodeImageUrl, decodeMediaUrl } from "./media.js";
+// Server-tool names for chat.create({ server_tools }), with autocomplete.
+export { ServerTools } from "./chat.js";
 //# sourceMappingURL=index.js.map

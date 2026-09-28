@@ -104,6 +104,19 @@ export interface ChatCompletionParams {
      * tighter cost guarantees.
      */
     max_server_iterations?: number;
+    /**
+     * One of the app's private prompts, kept out of the browser: the
+     * gateway reads `.runjobs/prompts/<id>.md` from the app's bundle, fills
+     * `{{var}}` placeholders from `vars`, and prepends it as the system
+     * message. `template` sends the text inline instead — for a creator's
+     * local dev server, before a bundle exists; the gateway accepts it
+     * only from the app's creator.
+     */
+    prompt?: {
+        id?: string;
+        vars?: Record<string, unknown>;
+        template?: string;
+    };
     /** Pass-through for provider-specific knobs. */
     [extra: string]: unknown;
 }
