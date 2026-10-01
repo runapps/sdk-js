@@ -1,12 +1,12 @@
 /**
- * RunJobs SDK for JavaScript / TypeScript.
+ * RunApps SDK for JavaScript / TypeScript.
  *
- * Top-level entry point — exports the `RunJobs` client class plus all
+ * Top-level entry point — exports the `RunApps` client class plus all
  * public types so callers can write strongly-typed wrappers without
  * reaching into per-service modules.
  */
 
-export { RunJobs, RunJobs as Client, type ClientOptions, type AuthProvider } from "./client.js";
+export { RunApps, RunApps as Client, RunApps as RunJobs, type ClientOptions, type AuthProvider } from "./client.js";
 
 // SDK telemetry — `client.events` fires these around every LLM-ish
 // service call so UI overlays (the badge being the canonical example)

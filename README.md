@@ -1,10 +1,10 @@
-# RunJobs SDK for JavaScript / TypeScript
+# RunApps SDK for JavaScript / TypeScript
 
-The client for building apps on [RunJobs](https://www.runjobs.ai): call any model (Claude, GPT, Gemini, DeepSeek, Qwen, MiniMax, GLM, Grok), generate images, audio and video, keep per-user files, and let the platform handle sign-in and billing. Zero runtime dependencies — native `fetch`, `FormData` and `ReadableStream` (browsers, Node 18+, Deno, Bun).
+The client for building apps on [RunApps](https://runapps.ai): call any model (Claude, GPT, Gemini, DeepSeek, Qwen, MiniMax, GLM, Grok), generate images, audio and video, keep per-user files, and let the platform handle sign-in and billing. Zero runtime dependencies — native `fetch`, `FormData` and `ReadableStream` (browsers, Node 18+, Deno, Bun).
 
 Two ways to use it:
 
-- **In an app you publish on RunJobs** — a static bundle served at `<slug>.runjobs.dev`. Users sign in with their RunJobs account and pay for their own usage; you never hold a key. This is what `authProvider: "runjobs"` is for.
+- **In an app you publish on RunApps** — a static bundle served at `<slug>.runapps.dev`. Users sign in with their RunApps account and pay for their own usage; you never hold a key. This is what `authProvider: "runjobs"` is for.
 - **From your own code** — server, script or CLI — with a personal API key (`rk_…`).
 
 ## Install
@@ -18,7 +18,7 @@ Or as a script tag:
 ```html
 <script src="https://cdn.jsdelivr.net/npm/@runjobsai/sdk/dist/sdk.umd.js"></script>
 <script>
-  const client = new RunJobs({ authProvider: "runjobs" });
+  const client = new RunApps({ authProvider: "runjobs" });
 </script>
 ```
 
@@ -29,9 +29,9 @@ Or as a script tag:
 An app gets its slug the moment you create it on the dashboard (创作者 → 发布) — no zip needed yet. Pass that slug as `project` and your dev server runs against the real platform:
 
 ```ts
-import { RunJobs } from "@runjobsai/sdk";
+import { RunApps } from "@runjobsai/sdk";
 
-const client = new RunJobs({
+const client = new RunApps({
   authProvider: "runjobs",   // sign-in, token, refresh — all handled
   project: "my-tool",        // the draft's slug; unchanged after you upload
 });
@@ -43,7 +43,7 @@ const resp = await client.chat.create({
 console.log(resp.choices[0].message.content);
 ```
 
-- Sign-in works from `http://localhost:<any port>`; the first call redirects to the RunJobs grant page and back.
+- Sign-in works from `http://localhost:<any port>`; the first call redirects to the RunApps grant page and back.
 - Calls are billed to the signed-in user — while developing, that is you.
 - Files and private prompts already use the app's real namespace, so nothing moves when you upload.
 
@@ -63,11 +63,11 @@ client.auth?.hasFreshToken();        // avoid showing a "sign in" button needles
 
 `showIdentityBadge` (default `true`) draws a small activity badge; `badgePosition` places it.
 
-`project` is optional on `*.runjobs.dev` — the origin already says which app it is. It is required on any other origin (localhost, your own domain) and when the client runs on a personal key (see below). In Node, `authProvider: "runjobs"` is a no-op; use `apiKey`.
+`project` is optional on `*.runapps.dev` — the origin already says which app it is. It is required on any other origin (localhost, your own domain) and when the client runs on a personal key (see below). In Node, `authProvider: "runjobs"` is a no-op; use `apiKey`.
 
 ### 3. Private prompts
 
-Anything in your frontend can be read in the browser. Put prompts in `.runjobs/prompts/<id>.md` inside your zip — the platform never serves that folder — and call them by name:
+Anything in your frontend can be read in the browser. Put prompts in `runapps.json (or .runapps/prompts/)<id>.md` inside your zip — the platform never serves that folder — and call them by name:
 
 ```ts
 await client.chat.create({
@@ -133,9 +133,9 @@ try {
 ## From your own code
 
 ```ts
-import { RunJobs, APIError } from "@runjobsai/sdk";
+import { RunApps, APIError } from "@runjobsai/sdk";
 
-const client = new RunJobs({ apiKey: "rk_…" });   // Dashboard → API Keys
+const client = new RunApps({ apiKey: "rk_…" });   // Dashboard → API Keys
 
 const resp = await client.chat.create({
   model: "Gemini 3 Flash",
@@ -144,21 +144,21 @@ const resp = await client.chat.create({
 console.log(resp.usage.total_cost);   // USD
 ```
 
-The default base URL is `https://api.runjobs.ai`; a browser client on `authProvider: "runjobs"` uses `https://www.runjobs.ai`. Both accept `baseURL`.
+The default base URL is `https://api.runapps.ai`; a browser client on `authProvider: "runjobs"` uses `https://runapps.ai`. Both accept `baseURL`.
 
-**Files with a personal key** — a personal key has no app of its own, so name the app: `new RunJobs({ apiKey, project: "my-tool" })`. You get your own files in that app, the same ones the app sees for you, provided you have added the app or created it.
+**Files with a personal key** — a personal key has no app of its own, so name the app: `new RunApps({ apiKey, project: "my-tool" })`. You get your own files in that app, the same ones the app sees for you, provided you have added the app or created it.
 
 **Any OpenAI- or Anthropic-compatible SDK works too.** Point it at the gateway with your `rk_…` key:
 
 ```python
 from openai import OpenAI
-client = OpenAI(api_key="rk_...", base_url="https://www.runjobs.ai/v1")
+client = OpenAI(api_key="rk_...", base_url="https://runapps.ai/v1")
 client.chat.completions.create(model="Claude Sonnet 4.6", messages=[{"role": "user", "content": "Hello!"}])
 ```
 
 ```python
 from anthropic import Anthropic
-client = Anthropic(api_key="rk_...", base_url="https://www.runjobs.ai")
+client = Anthropic(api_key="rk_...", base_url="https://runapps.ai")
 client.messages.create(model="Claude Sonnet 4.6", max_tokens=1024, messages=[{"role": "user", "content": "Hello!"}])
 ```
 
@@ -274,7 +274,7 @@ Helpers: `hasCapabilityTag`, `acceptsModality`, `getOptionsSchema`, `acceptsFiel
 
 ## Compatibility
 
-Browsers (any modern), Node 18+, Deno, Bun. Never ship an `rk_…` key to a browser — an app published on RunJobs uses `authProvider: "runjobs"` instead, and the user pays for their own usage.
+Browsers (any modern), Node 18+, Deno, Bun. Never ship an `rk_…` key to a browser — an app published on RunApps uses `authProvider: "runjobs"` instead, and the user pays for their own usage.
 
 ## License
 

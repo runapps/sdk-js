@@ -3,7 +3,7 @@
 // Each FileObject's `url` is a stable public address — embed it
 // directly in `<img src>`, share it, persist it.
 //
-// The bundle's RunJobs client uses `client.files` to access these
+// The bundle's RunApps client uses `client.files` to access these
 // endpoints; the underlying token must be a project-bound resource
 // token (rrt_*) issued by the grant flow.
 

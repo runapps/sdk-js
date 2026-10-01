@@ -1,6 +1,6 @@
-// browser-auth.ts — opt-in runjobs.ai auth flow for browser bundles.
+// browser-auth.ts — opt-in runapps.ai auth flow for browser bundles.
 //
-// Activated by `new RunJobs({ authProvider: "runjobs", baseURL: "..." })`.
+// Activated by `new RunApps({ authProvider: "runjobs", baseURL: "..." })`.
 // In Node and other non-window environments this module's runtime code
 // short-circuits to no-ops; it ships with the IIFE bundle for resource
 // bundles loaded via <script> tag.
@@ -26,22 +26,22 @@ import type { SDKEvents } from "./events.js";
 
 export interface BrowserAuthOptions {
   /**
-   * Origin where the runjobs gateway lives — also the page that issues
-   * tokens at /api/sdk/grant.  Default `https://www.runjobs.ai`.
+   * Origin where the RunApps gateway lives — also the page that issues
+   * tokens at /api/sdk/grant.  Default `https://runapps.ai`.
    */
   origin?: string;
   /**
    * Suppress the floating identity badge.  Default `false` at this
-   * layer.  The wrapping `RunJobs` client passes `hideBadge: false`
+   * layer.  The wrapping `RunApps` client passes `hideBadge: false`
    * by default (badge SHOWN — it's now a live activity indicator,
    * see `activity-tracker.ts`); callers wanting their own status UI
-   * opt out via `RunJobs({ showIdentityBadge: false })`. Set this
+   * opt out via `RunApps({ showIdentityBadge: false })`. Set this
    * directly only when constructing BrowserAuth without going
-   * through `RunJobs`.
+   * through `RunApps`.
    */
   hideBadge?: boolean;
   /**
-   * Pin the grant flow to a named runjobs.ai project.  When set, the
+   * Pin the grant flow to a named runapps.ai project.  When set, the
    * SDK passes `project_id=<value>` to `/api/sdk/grant`, asking the
    * gateway to mint a project-bound `rrt_*` resource token for THAT
    * project regardless of which (origin, app) pair the bundle is
@@ -62,7 +62,7 @@ export interface BrowserAuthOptions {
    */
   project?: string;
   /**
-   * Optional event bus from the parent RunJobs client.  When wired,
+   * Optional event bus from the parent RunApps client.  When wired,
    * the identity badge subscribes to call telemetry events and
    * renders a real-time activity ring + LED dot + click-through
    * popover with active / recent / session stats — turning the
@@ -74,7 +74,7 @@ export interface BrowserAuthOptions {
    */
   events?: SDKEvents;
   /**
-   * Which corner the badge floats in. See `RunJobs.badgePosition`
+   * Which corner the badge floats in. See `RunApps.badgePosition`
    * for the user-facing flavour. Defaults to `"bottom-right"`.
    */
   badgePosition?: BadgePosition;
@@ -106,7 +106,7 @@ const TOKEN_REFRESH_MARGIN_S = 60;
 const STORAGE_KEY_BASE = "__runjobs_auth_v1__";
 // Set when the user clicks "Sign out".  While present, getToken() must
 // not silently redirect to the grant page even though the user still
-// has a runjobs.ai cookie — otherwise the backend's auto-grant turns
+// has a runapps.ai cookie — otherwise the backend's auto-grant turns
 // every page reload into a re-authentication.  Cleared on explicit
 // signIn() so the user can come back.  Same per-project namespacing
 // rationale as STORAGE_KEY_BASE — signing out of bundle A shouldn't
@@ -133,7 +133,7 @@ interface PersistedAuth {
 }
 
 /**
- * BrowserAuth encapsulates the browser-side auth state for a RunJobs
+ * BrowserAuth encapsulates the browser-side auth state for a RunApps
  * client.  Exposes:
  *
  *   - getToken()       fresh bearer (auto-refreshes / signs in)
@@ -161,7 +161,7 @@ export class BrowserAuth {
   private signingIn = false;
 
   constructor(opts: BrowserAuthOptions = {}) {
-    this.origin = (opts.origin ?? "https://www.runjobs.ai").replace(/\/$/, "");
+    this.origin = (opts.origin ?? "https://runapps.ai").replace(/\/$/, "");
     this.hideBadge = !!opts.hideBadge;
     this.project = opts.project ?? null;
     this.events = opts.events ?? null;
@@ -207,7 +207,7 @@ export class BrowserAuth {
     }
   }
 
-  /** Public token-fetcher; pass to RunJobs as `apiKeyResolver`. */
+  /** Public token-fetcher; pass to RunApps as `apiKeyResolver`. */
   getToken = async (): Promise<string> => {
     if (this.tokenIsFresh()) return this.token as string;
 
@@ -217,7 +217,7 @@ export class BrowserAuth {
     // auto-grant flow would re-issue a token on every page reload
     // (the cookie on the gateway domain is still valid).
     if (this.isSignedOut()) {
-      throw new Error("RunJobs: signed out — call client.signIn() to authenticate");
+      throw new Error("RunApps: signed out — call client.signIn() to authenticate");
     }
 
     // ── Embedded (cross-site iframe) path ──
@@ -250,7 +250,7 @@ export class BrowserAuth {
       if (this.tokenIsFresh()) return this.token as string;
       // Never signIn() inside an iframe (cookie-less grant dead end).
       // Surface as unauthenticated so the bundle can retry / show state.
-      throw new Error("RunJobs: could not obtain a token from the dashboard");
+      throw new Error("RunApps: could not obtain a token from the dashboard");
     }
 
     // ── Top-level (own tab / window) path ──
@@ -591,14 +591,14 @@ export class BrowserAuth {
         setTimeout(() => {
           if (done) return;
           cleanup();
-          reject(new Error("runjobs: parent handshake timeout"));
+          reject(new Error("runapps: parent handshake timeout"));
         }, 5000),
       );
     });
   }
 
   /** Floating identity badge — bottom-right pill showing the user.
-   *  Click opens the runjobs.ai dashboard in a new tab so the user
+   *  Click opens the runapps.ai dashboard in a new tab so the user
    *  can manage their account / billing without losing the bundle's
    *  in-flight state.  Uses `noopener,noreferrer` so the new tab
    *  can't reach back into the bundle window via `window.opener`. */
@@ -839,8 +839,8 @@ function mountActivityBadge(opts: MountOpts): HTMLButtonElement {
   const el = document.createElement("button");
   el.id = id;
   el.type = "button";
-  el.title = "RunJobs activity";
-  el.setAttribute("aria-label", "RunJobs activity status");
+  el.title = "RunApps activity";
+  el.setAttribute("aria-label", "RunApps activity status");
   el.style.cssText = [
     "position:fixed",
     corners.badge,

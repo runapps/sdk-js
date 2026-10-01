@@ -1,11 +1,11 @@
 /**
- * RunJobs SDK for JavaScript / TypeScript.
+ * RunApps SDK for JavaScript / TypeScript.
  *
- * Top-level entry point — exports the `RunJobs` client class plus all
+ * Top-level entry point — exports the `RunApps` client class plus all
  * public types so callers can write strongly-typed wrappers without
  * reaching into per-service modules.
  */
-export { RunJobs, RunJobs as Client, type ClientOptions, type AuthProvider } from "./client.js";
+export { RunApps, RunApps as Client, RunApps as RunJobs, type ClientOptions, type AuthProvider } from "./client.js";
 export { SDKEvents, newRequestId, type RequestStartEvent, type RequestStreamDeltaEvent, type RequestEndEvent, type RequestErrorEvent, type SDKEventMap, type SDKCapability, type Unsubscribe, } from "./events.js";
 export { ActivityTracker, type ActiveCall, type CompletedCall, type SessionStats, type ActivitySnapshot, } from "./activity-tracker.js";
 export { BrowserAuth, type BrowserAuthOptions, type BrowserUser } from "./browser-auth.js";

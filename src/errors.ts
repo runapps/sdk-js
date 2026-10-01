@@ -1,5 +1,5 @@
 /**
- * APIError represents an error returned by the RunJobs gateway.
+ * APIError represents an error returned by the RunApps gateway.
  *
  * Use `instanceof APIError` (or check `name === "APIError"`) to distinguish
  * gateway errors from network / runtime errors:
@@ -21,7 +21,7 @@ export class APIError extends Error {
   public readonly type: string;
 
   constructor(statusCode: number, type: string, message: string) {
-    super(`runjobs: ${statusCode} ${type}: ${message}`);
+    super(`runapps: ${statusCode} ${type}: ${message}`);
     this.name = "APIError";
     this.statusCode = statusCode;
     this.type = type;

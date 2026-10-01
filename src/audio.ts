@@ -174,7 +174,7 @@ export class AudioService {
           init,
         );
         if (!submit.id) {
-          throw new Error("runjobs: speech submit response missing job id");
+          throw new Error("runapps: speech submit response missing job id");
         }
         return waitSpeechJob(this.transport, submit.id, init);
       },
@@ -228,7 +228,7 @@ export class AudioService {
           init,
         );
         if (!submit.id) {
-          throw new Error("runjobs: transcribe submit response missing job id");
+          throw new Error("runapps: transcribe submit response missing job id");
         }
         return waitTranscribeJob(this.transport, submit.id, init);
       },
@@ -269,7 +269,7 @@ async function waitSpeechJob(
       throw new DOMException("speech poll aborted", "AbortError");
     }
     if (!init?.signal && Date.now() > internalDeadline) {
-      throw new Error("runjobs: speech job timed out (10 min internal cap)");
+      throw new Error("runapps: speech job timed out (10 min internal cap)");
     }
     const status = await transport.getJSON<{
       id: string;
@@ -280,7 +280,7 @@ async function waitSpeechJob(
     }>(path, init);
     if (status.status === "succeeded") {
       if (!status.audio_url) {
-        throw new Error("runjobs: speech job succeeded but no audio_url returned");
+        throw new Error("runapps: speech job succeeded but no audio_url returned");
       }
       const { bytes, contentType } = await decodeMediaUrl(status.audio_url);
       return {
@@ -290,7 +290,7 @@ async function waitSpeechJob(
       };
     }
     if (status.status === "failed") {
-      throw new Error(status.error || "runjobs: speech job failed");
+      throw new Error(status.error || "runapps: speech job failed");
     }
     // queued | running → wait + retry.
     await sleep(interval, init?.signal);
@@ -316,20 +316,20 @@ async function waitTranscribeJob(
       throw new DOMException("transcribe poll aborted", "AbortError");
     }
     if (!init?.signal && Date.now() > internalDeadline) {
-      throw new Error("runjobs: transcribe job timed out (10 min internal cap)");
+      throw new Error("runapps: transcribe job timed out (10 min internal cap)");
     }
     const status = await transport.getJSON<Record<string, unknown>>(path, init);
     switch (status.status) {
       case "succeeded":
         return assembleTranscribeResponse(status);
       case "failed":
-        throw new Error((status.error as string) || "runjobs: transcribe job failed");
+        throw new Error((status.error as string) || "runapps: transcribe job failed");
       case "queued":
       case "running":
         await sleep(interval, init?.signal);
         break;
       default:
-        throw new Error(`runjobs: unknown transcribe job status ${JSON.stringify(status.status)}`);
+        throw new Error(`runapps: unknown transcribe job status ${JSON.stringify(status.status)}`);
     }
   }
 }

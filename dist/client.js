@@ -9,16 +9,16 @@ import { FilesService } from "./files.js";
 import { EmbeddingsService } from "./embeddings.js";
 import { BrowserAuth } from "./browser-auth.js";
 import { SDKEvents } from "./events.js";
-const DEFAULT_BASE_URL = "https://api.runjobs.ai";
+const DEFAULT_BASE_URL = "https://api.runapps.ai";
 /**
- * Top-level RunJobs SDK client.  Construct once, share across services.
+ * Top-level RunApps SDK client.  Construct once, share across services.
  *
- * Browser bundle (resource projects on runjobs.ai):
+ * Browser bundle (resource projects on runapps.ai):
  *
  * ```html
  * <script src="https://cdn.jsdelivr.net/npm/@runjobsai/sdk/dist/sdk.umd.js"></script>
  * <script>
- *   const client = new RunJobs.Client({ authProvider: "runjobs" });
+ *   const client = new RunApps.Client({ authProvider: "runapps" });
  *   const res = await client.chat.create({
  *     model: "gpt-4o-mini",
  *     messages: [{ role: "user", content: "hello" }],
@@ -29,11 +29,11 @@ const DEFAULT_BASE_URL = "https://api.runjobs.ai";
  * Node / server-side:
  *
  * ```ts
- * import { RunJobs } from "@runjobsai/sdk";
- * const client = new RunJobs({ apiKey: process.env.RUNJOBS_API_KEY! });
+ * import { RunApps } from "@runjobsai/sdk";
+ * const client = new RunApps({ apiKey: process.env.RUNJOBS_API_KEY! });
  * ```
  */
-export class RunJobs {
+export class RunApps {
     chat;
     models;
     image;
@@ -43,7 +43,7 @@ export class RunJobs {
     files;
     embeddings;
     /**
-     * Browser auth helper, populated only when `authProvider: "runjobs"`.
+     * Browser auth helper, populated only when `authProvider: "runapps"`.
      * Use `client.signIn()` and `client.user` for the common cases; the
      * full instance is exposed for advanced flows (manual `onTokenChange`
      * subscription, etc.).
@@ -67,11 +67,11 @@ export class RunJobs {
         let apiKeyResolver = options.apiKeyResolver;
         let baseURL = options.baseURL;
         let onUnauthorized;
-        if (provider === "runjobs") {
-            // Default the gateway origin to www.runjobs.ai for the runjobs
+        if (provider === "runapps" || provider === "runjobs") {
+            // Default the gateway origin to runapps.ai for the runjobs
             // auth flow — that's where /api/sdk/grant lives.  Users overriding
             // baseURL explicitly (e.g. self-hosted runjobs) keep control.
-            baseURL = baseURL ?? "https://www.runjobs.ai";
+            baseURL = baseURL ?? "https://runapps.ai";
             // Badge default: SHOWN. The badge is now a real-time activity
             // indicator (LED + ring + popover) — useful enough that we'd
             // rather have the rare "I already have my own UI" bundle opt
@@ -105,7 +105,7 @@ export class RunJobs {
             onUnauthorized = () => auth.invalidate();
         }
         if (!options.apiKey && !apiKeyResolver) {
-            throw new Error("runjobs: pass either `apiKey`, `apiKeyResolver`, or `authProvider: \"runjobs\"`");
+            throw new Error("runapps: pass either `apiKey`, `apiKeyResolver`, or `authProvider: \"runjobs\"`");
         }
         const transport = new Transport({
             baseURL: baseURL ?? DEFAULT_BASE_URL,
@@ -132,7 +132,7 @@ export class RunJobs {
         this.files = new FilesService(transport, options.project);
         this.embeddings = new EmbeddingsService(transport, this.events);
     }
-    /** Force a redirect to the runjobs.ai grant page.  No-op in static
+    /** Force a redirect to the runapps.ai grant page.  No-op in static
      *  auth mode or in Node. */
     signIn() {
         this.auth?.signIn();

@@ -87,7 +87,7 @@ export class ChatService {
         const sourceGen = async function* () {
             const resp = await this.transport.postJSONStream("/v1/chat/completions", body, init);
             if (!resp.body) {
-                throw new Error("runjobs: streaming response had no body");
+                throw new Error("runapps: streaming response had no body");
             }
             yield* parseSSE(resp.body);
         }.bind(this);
@@ -133,7 +133,7 @@ async function* parseSSE(body) {
                     parsed = JSON.parse(data);
                 }
                 catch (e) {
-                    throw new Error(`runjobs: decode stream chunk: ${e.message}`);
+                    throw new Error(`runapps: decode stream chunk: ${e.message}`);
                 }
                 // The gateway reports mid-stream failures as an SSE error event
                 // (`data: {"error":{...}}`) followed by [DONE]. Such an event has no

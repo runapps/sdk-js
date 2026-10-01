@@ -1,22 +1,22 @@
 import type { SDKEvents } from "./events.js";
 export interface BrowserAuthOptions {
     /**
-     * Origin where the runjobs gateway lives — also the page that issues
-     * tokens at /api/sdk/grant.  Default `https://www.runjobs.ai`.
+     * Origin where the RunApps gateway lives — also the page that issues
+     * tokens at /api/sdk/grant.  Default `https://runapps.ai`.
      */
     origin?: string;
     /**
      * Suppress the floating identity badge.  Default `false` at this
-     * layer.  The wrapping `RunJobs` client passes `hideBadge: false`
+     * layer.  The wrapping `RunApps` client passes `hideBadge: false`
      * by default (badge SHOWN — it's now a live activity indicator,
      * see `activity-tracker.ts`); callers wanting their own status UI
-     * opt out via `RunJobs({ showIdentityBadge: false })`. Set this
+     * opt out via `RunApps({ showIdentityBadge: false })`. Set this
      * directly only when constructing BrowserAuth without going
-     * through `RunJobs`.
+     * through `RunApps`.
      */
     hideBadge?: boolean;
     /**
-     * Pin the grant flow to a named runjobs.ai project.  When set, the
+     * Pin the grant flow to a named runapps.ai project.  When set, the
      * SDK passes `project_id=<value>` to `/api/sdk/grant`, asking the
      * gateway to mint a project-bound `rrt_*` resource token for THAT
      * project regardless of which (origin, app) pair the bundle is
@@ -37,7 +37,7 @@ export interface BrowserAuthOptions {
      */
     project?: string;
     /**
-     * Optional event bus from the parent RunJobs client.  When wired,
+     * Optional event bus from the parent RunApps client.  When wired,
      * the identity badge subscribes to call telemetry events and
      * renders a real-time activity ring + LED dot + click-through
      * popover with active / recent / session stats — turning the
@@ -49,7 +49,7 @@ export interface BrowserAuthOptions {
      */
     events?: SDKEvents;
     /**
-     * Which corner the badge floats in. See `RunJobs.badgePosition`
+     * Which corner the badge floats in. See `RunApps.badgePosition`
      * for the user-facing flavour. Defaults to `"bottom-right"`.
      */
     badgePosition?: BadgePosition;
@@ -61,7 +61,7 @@ export interface BrowserUser {
     name?: string;
 }
 /**
- * BrowserAuth encapsulates the browser-side auth state for a RunJobs
+ * BrowserAuth encapsulates the browser-side auth state for a RunApps
  * client.  Exposes:
  *
  *   - getToken()       fresh bearer (auto-refreshes / signs in)
@@ -88,7 +88,7 @@ export declare class BrowserAuth {
     private parentHandshake;
     private signingIn;
     constructor(opts?: BrowserAuthOptions);
-    /** Public token-fetcher; pass to RunJobs as `apiKeyResolver`. */
+    /** Public token-fetcher; pass to RunApps as `apiKeyResolver`. */
     getToken: () => Promise<string>;
     /** Subscribe to (re)acquisition events. Returns an unsubscribe fn. */
     onTokenChange(handler: (token: string) => void): () => void;
@@ -170,7 +170,7 @@ export declare class BrowserAuth {
     /** postMessage handshake with the dashboard parent (iframe path). */
     private requestTokenFromParent;
     /** Floating identity badge — bottom-right pill showing the user.
-     *  Click opens the runjobs.ai dashboard in a new tab so the user
+     *  Click opens the runapps.ai dashboard in a new tab so the user
      *  can manage their account / billing without losing the bundle's
      *  in-flight state.  Uses `noopener,noreferrer` so the new tab
      *  can't reach back into the bundle window via `window.opener`. */

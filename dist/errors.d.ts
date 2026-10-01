@@ -1,5 +1,5 @@
 /**
- * APIError represents an error returned by the RunJobs gateway.
+ * APIError represents an error returned by the RunApps gateway.
  *
  * Use `instanceof APIError` (or check `name === "APIError"`) to distinguish
  * gateway errors from network / runtime errors:

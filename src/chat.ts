@@ -104,7 +104,7 @@ export interface ChatCompletionParams {
   max_server_iterations?: number;
   /**
    * One of the app's private prompts, kept out of the browser: the
-   * gateway reads `.runjobs/prompts/<id>.md` from the app's bundle, fills
+   * gateway reads `runapps.json (or .runapps/prompts/)<id>.md` from the app's bundle, fills
    * `{{var}}` placeholders from `vars`, and prepends it as the system
    * message. `template` sends the text inline instead — for a creator's
    * local dev server, before a bundle exists; the gateway accepts it
@@ -291,7 +291,7 @@ export class ChatService {
         init,
       );
       if (!resp.body) {
-        throw new Error("runjobs: streaming response had no body");
+        throw new Error("runapps: streaming response had no body");
       }
       yield* parseSSE<ChatCompletionChunk>(resp.body);
     }.bind(this);
@@ -343,7 +343,7 @@ async function* parseSSE<T>(
           parsed = JSON.parse(data);
         } catch (e) {
           throw new Error(
-            `runjobs: decode stream chunk: ${(e as Error).message}`,
+            `runapps: decode stream chunk: ${(e as Error).message}`,
           );
         }
         // The gateway reports mid-stream failures as an SSE error event

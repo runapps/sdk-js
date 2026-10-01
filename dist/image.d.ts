@@ -42,7 +42,7 @@ export interface ImageGenerateParams {
 /**
  * Single generated image. `url` carries the bytes via one of two
  * transport modes — `<img src={url}>` works for both:
- *   - "https://api.runjobs.ai/v1/blobs/<id>" — async / hosted blob
+ *   - "https://api.runapps.ai/v1/blobs/<id>" — async / hosted blob
  *   - "data:<mime>;base64,<payload>"        — sync / inline
  *
  * `decodeMediaUrl(url)` resolves either shape into `Uint8Array` +
