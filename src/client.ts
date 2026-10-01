@@ -17,7 +17,7 @@ const DEFAULT_BASE_URL = "https://api.runapps.ai";
  *
  *   - `"static"` (default): use `apiKey` or `apiKeyResolver` directly.
  *   - `"runapps"`: opt into the built-in browser auth flow that
- *     handshakes with `https://runapps.ai/api/sdk/grant`.  No
+ *     handshakes with `https://www.runapps.ai/api/sdk/grant`.  No
  *     external auth.js script needed; the SDK consumes the URL
  *     fragment after the redirect-back, exposes `client.user` and
  *     `client.signIn()`, and renders an identity badge.  Only useful
@@ -42,7 +42,7 @@ export interface ClientOptions {
   /**
    * Auth strategy — defaults to `"static"`.  Pass `"runapps"` to
    * activate the built-in browser auth flow against runapps.ai;
-   * baseURL defaults to `https://runapps.ai` in that mode.
+   * baseURL defaults to `https://www.runapps.ai` in that mode.
    */
   authProvider?: AuthProvider;
   /**
@@ -87,7 +87,7 @@ export interface ClientOptions {
    */
   project?: string;
   /** Override the default gateway base URL.  Defaults to
-   *  `https://api.runapps.ai`, or `https://runapps.ai` when
+   *  `https://api.runapps.ai`, or `https://www.runapps.ai` when
    *  `authProvider: "runapps"` is set. */
   baseURL?: string;
   /** Optional fetch override (e.g. node-fetch with custom agent). */
@@ -159,7 +159,7 @@ export class RunApps {
       // Default the gateway origin to runapps.ai for the runjobs
       // auth flow — that's where /api/sdk/grant lives.  Users overriding
       // baseURL explicitly (e.g. self-hosted runjobs) keep control.
-      baseURL = baseURL ?? "https://runapps.ai";
+      baseURL = baseURL ?? "https://www.runapps.ai";
       // Badge default: SHOWN. The badge is now a real-time activity
       // indicator (LED + ring + popover) — useful enough that we'd
       // rather have the rare "I already have my own UI" bundle opt

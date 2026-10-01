@@ -71,7 +71,7 @@ export class RunApps {
             // Default the gateway origin to runapps.ai for the runjobs
             // auth flow — that's where /api/sdk/grant lives.  Users overriding
             // baseURL explicitly (e.g. self-hosted runjobs) keep control.
-            baseURL = baseURL ?? "https://runapps.ai";
+            baseURL = baseURL ?? "https://www.runapps.ai";
             // Badge default: SHOWN. The badge is now a real-time activity
             // indicator (LED + ring + popover) — useful enough that we'd
             // rather have the rare "I already have my own UI" bundle opt

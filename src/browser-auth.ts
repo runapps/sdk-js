@@ -27,7 +27,7 @@ import type { SDKEvents } from "./events.js";
 export interface BrowserAuthOptions {
   /**
    * Origin where the RunApps gateway lives — also the page that issues
-   * tokens at /api/sdk/grant.  Default `https://runapps.ai`.
+   * tokens at /api/sdk/grant.  Default `https://www.runapps.ai`.
    */
   origin?: string;
   /**
@@ -161,7 +161,7 @@ export class BrowserAuth {
   private signingIn = false;
 
   constructor(opts: BrowserAuthOptions = {}) {
-    this.origin = (opts.origin ?? "https://runapps.ai").replace(/\/$/, "");
+    this.origin = (opts.origin ?? "https://www.runapps.ai").replace(/\/$/, "");
     this.hideBadge = !!opts.hideBadge;
     this.project = opts.project ?? null;
     this.events = opts.events ?? null;

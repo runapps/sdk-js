@@ -83,7 +83,7 @@ export class BrowserAuth {
     parentHandshake = null;
     signingIn = false;
     constructor(opts = {}) {
-        this.origin = (opts.origin ?? "https://runapps.ai").replace(/\/$/, "");
+        this.origin = (opts.origin ?? "https://www.runapps.ai").replace(/\/$/, "");
         this.hideBadge = !!opts.hideBadge;
         this.project = opts.project ?? null;
         this.events = opts.events ?? null;

@@ -1,6 +1,6 @@
 # RunApps SDK for JavaScript / TypeScript
 
-The client for building apps on [RunApps](https://runapps.ai): call any model (Claude, GPT, Gemini, DeepSeek, Qwen, MiniMax, GLM, Grok), generate images, audio and video, keep per-user files, and let the platform handle sign-in and billing. Zero runtime dependencies — native `fetch`, `FormData` and `ReadableStream` (browsers, Node 18+, Deno, Bun).
+The client for building apps on [RunApps](https://www.runapps.ai): call any model (Claude, GPT, Gemini, DeepSeek, Qwen, MiniMax, GLM, Grok), generate images, audio and video, keep per-user files, and let the platform handle sign-in and billing. Zero runtime dependencies — native `fetch`, `FormData` and `ReadableStream` (browsers, Node 18+, Deno, Bun).
 
 Two ways to use it:
 
@@ -144,7 +144,7 @@ const resp = await client.chat.create({
 console.log(resp.usage.total_cost);   // USD
 ```
 
-The default base URL is `https://api.runapps.ai`; a browser client on `authProvider: "runjobs"` uses `https://runapps.ai`. Both accept `baseURL`.
+The default base URL is `https://api.runapps.ai`; a browser client on `authProvider: "runjobs"` uses `https://www.runapps.ai`. Both accept `baseURL`.
 
 **Files with a personal key** — a personal key has no app of its own, so name the app: `new RunApps({ apiKey, project: "my-tool" })`. You get your own files in that app, the same ones the app sees for you, provided you have added the app or created it.
 
@@ -152,13 +152,13 @@ The default base URL is `https://api.runapps.ai`; a browser client on `authProvi
 
 ```python
 from openai import OpenAI
-client = OpenAI(api_key="rk_...", base_url="https://runapps.ai/v1")
+client = OpenAI(api_key="rk_...", base_url="https://www.runapps.ai/v1")
 client.chat.completions.create(model="Claude Sonnet 4.6", messages=[{"role": "user", "content": "Hello!"}])
 ```
 
 ```python
 from anthropic import Anthropic
-client = Anthropic(api_key="rk_...", base_url="https://runapps.ai")
+client = Anthropic(api_key="rk_...", base_url="https://www.runapps.ai")
 client.messages.create(model="Claude Sonnet 4.6", max_tokens=1024, messages=[{"role": "user", "content": "Hello!"}])
 ```
 

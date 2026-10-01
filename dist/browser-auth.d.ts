@@ -2,7 +2,7 @@ import type { SDKEvents } from "./events.js";
 export interface BrowserAuthOptions {
     /**
      * Origin where the RunApps gateway lives — also the page that issues
-     * tokens at /api/sdk/grant.  Default `https://runapps.ai`.
+     * tokens at /api/sdk/grant.  Default `https://www.runapps.ai`.
      */
     origin?: string;
     /**
