@@ -67,7 +67,7 @@ client.auth?.hasFreshToken();        // avoid showing a "sign in" button needles
 
 ### 3. Private prompts
 
-Anything in your frontend can be read in the browser. Put prompts in `runapps.json (or .runapps/prompts/)<id>.md` inside your zip — the platform never serves that folder — and call them by name:
+Anything in your frontend can be read in the browser. Put prompts in `bundle.json (or .runapps/prompts/)<id>.md` inside your zip — the platform never serves that folder — and call them by name:
 
 ```ts
 await client.chat.create({
