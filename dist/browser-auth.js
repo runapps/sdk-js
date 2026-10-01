@@ -336,7 +336,7 @@ export class BrowserAuth {
                 fn(token);
             }
             catch (err) {
-                console.warn("[runjobs] onTokenChange handler threw", err);
+                console.warn("[runapps] onTokenChange handler threw", err);
             }
         }
     }

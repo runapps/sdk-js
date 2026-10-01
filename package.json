@@ -1,9 +1,9 @@
 {
   "name": "@runjobsai/sdk",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "JavaScript / TypeScript client for the RunApps AI Gateway",
   "license": "MIT",
-  "author": "RunJobs",
+  "author": "RunApps",
   "homepage": "https://github.com/runjobsai/sdk-js",
   "repository": {
     "type": "git",

@@ -105,7 +105,7 @@ export class RunApps {
             onUnauthorized = () => auth.invalidate();
         }
         if (!options.apiKey && !apiKeyResolver) {
-            throw new Error("runapps: pass either `apiKey`, `apiKeyResolver`, or `authProvider: \"runjobs\"`");
+            throw new Error("runapps: pass either `apiKey`, `apiKeyResolver`, or `authProvider: \"runapps\"`");
         }
         const transport = new Transport({
             baseURL: baseURL ?? DEFAULT_BASE_URL,
@@ -147,7 +147,7 @@ export class RunApps {
     signOut() {
         this.auth?.signOut();
     }
-    /** Currently-authenticated user (runjobs auth mode), or null. */
+    /** Currently-authenticated user (runapps auth mode), or null. */
     get user() {
         return this.auth?.user ?? null;
     }

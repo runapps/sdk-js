@@ -148,7 +148,7 @@ export class SDKEvents {
         // Listener bug — don't propagate, but surface in the console
         // so developers notice during integration.
         // eslint-disable-next-line no-console
-        console.error("[runjobs sdk] event listener for", name, "threw:", err);
+        console.error("[runapps sdk] event listener for", name, "threw:", err);
       }
     }
   }

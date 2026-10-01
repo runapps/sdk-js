@@ -150,7 +150,7 @@ export declare class RunApps {
      * No-op in static auth mode or in Node.
      */
     signOut(): void;
-    /** Currently-authenticated user (runjobs auth mode), or null. */
+    /** Currently-authenticated user (runapps auth mode), or null. */
     get user(): BrowserUser | null;
 }
 //# sourceMappingURL=client.d.ts.map

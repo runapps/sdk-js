@@ -196,7 +196,7 @@ export class RunApps {
 
     if (!options.apiKey && !apiKeyResolver) {
       throw new Error(
-        "runapps: pass either `apiKey`, `apiKeyResolver`, or `authProvider: \"runjobs\"`",
+        "runapps: pass either `apiKey`, `apiKeyResolver`, or `authProvider: \"runapps\"`",
       );
     }
     const transport = new Transport({
@@ -242,7 +242,7 @@ export class RunApps {
     this.auth?.signOut();
   }
 
-  /** Currently-authenticated user (runjobs auth mode), or null. */
+  /** Currently-authenticated user (runapps auth mode), or null. */
   get user(): BrowserUser | null {
     return this.auth?.user ?? null;
   }

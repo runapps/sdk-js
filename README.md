@@ -4,7 +4,7 @@ The client for building apps on [RunApps](https://www.runapps.ai): call any mode
 
 Two ways to use it:
 
-- **In an app you publish on RunApps** — a static bundle served at `<slug>.runapps.dev`. Users sign in with their RunApps account and pay for their own usage; you never hold a key. This is what `authProvider: "runjobs"` is for.
+- **In an app you publish on RunApps** — a static bundle served at `<slug>.runapps.dev`. Users sign in with their RunApps account and pay for their own usage; you never hold a key. This is what `authProvider: "runapps"` is for.
 - **From your own code** — server, script or CLI — with a personal API key (`rk_…`).
 
 ## Install
@@ -18,7 +18,7 @@ Or as a script tag:
 ```html
 <script src="https://cdn.jsdelivr.net/npm/@runjobsai/sdk/dist/sdk.umd.js"></script>
 <script>
-  const client = new RunApps({ authProvider: "runjobs" });
+  const client = new RunApps({ authProvider: "runapps" });
 </script>
 ```
 
@@ -32,7 +32,7 @@ An app gets its slug the moment you create it on the dashboard (创作者 → �
 import { RunApps } from "@runjobsai/sdk";
 
 const client = new RunApps({
-  authProvider: "runjobs",   // sign-in, token, refresh — all handled
+  authProvider: "runapps",   // sign-in, token, refresh — all handled
   project: "my-tool",        // the draft's slug; unchanged after you upload
 });
 
@@ -63,7 +63,7 @@ client.auth?.hasFreshToken();        // avoid showing a "sign in" button needles
 
 `showIdentityBadge` (default `true`) draws a small activity badge; `badgePosition` places it.
 
-`project` is optional on `*.runapps.dev` — the origin already says which app it is. It is required on any other origin (localhost, your own domain) and when the client runs on a personal key (see below). In Node, `authProvider: "runjobs"` is a no-op; use `apiKey`.
+`project` is optional on `*.runapps.dev` — the origin already says which app it is. It is required on any other origin (localhost, your own domain) and when the client runs on a personal key (see below). In Node, `authProvider: "runapps"` is a no-op; use `apiKey`.
 
 ### 3. Private prompts
 
@@ -144,7 +144,7 @@ const resp = await client.chat.create({
 console.log(resp.usage.total_cost);   // USD
 ```
 
-The default base URL is `https://api.runapps.ai`; a browser client on `authProvider: "runjobs"` uses `https://www.runapps.ai`. Both accept `baseURL`.
+The default base URL is `https://api.runapps.ai`; a browser client on `authProvider: "runapps"` uses `https://www.runapps.ai`. Both accept `baseURL`.
 
 **Files with a personal key** — a personal key has no app of its own, so name the app: `new RunApps({ apiKey, project: "my-tool" })`. You get your own files in that app, the same ones the app sees for you, provided you have added the app or created it.
 
@@ -274,7 +274,7 @@ Helpers: `hasCapabilityTag`, `acceptsModality`, `getOptionsSchema`, `acceptsFiel
 
 ## Compatibility
 
-Browsers (any modern), Node 18+, Deno, Bun. Never ship an `rk_…` key to a browser — an app published on RunApps uses `authProvider: "runjobs"` instead, and the user pays for their own usage.
+Browsers (any modern), Node 18+, Deno, Bun. Never ship an `rk_…` key to a browser — an app published on RunApps uses `authProvider: "runapps"` instead, and the user pays for their own usage.
 
 ## License
 
