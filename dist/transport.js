@@ -92,6 +92,20 @@ export class Transport {
         }
         return (await resp.json());
     }
+    /** GET a public path: no Authorization header, so it never fetches a
+     *  token — in browser sign-in mode that would send a signed-out user to
+     *  the sign-in page just to read the model catalogue. */
+    async getPublicJSON(path, init) {
+        const resp = await this.fetchImpl(this.baseURL + path, {
+            method: "GET",
+            cache: "no-store",
+            ...(init?.signal ? { signal: init.signal } : {}),
+        });
+        if (!resp.ok) {
+            throw await this.parseError(resp);
+        }
+        return (await resp.json());
+    }
     /** GET path; return raw bytes + content-type (for video/audio downloads)
      *  and the ETag of those bytes, when the server sends one. */
     async getRaw(path, init) {

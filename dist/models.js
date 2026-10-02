@@ -41,14 +41,16 @@ export class ModelsService {
     }
     /**
      * List models available on the gateway. Pass `{ capability: "..." }` to
-     * filter server-side.
+     * filter server-side. Needs no sign-in or key.
      */
     async list(opts = {}, init) {
         let path = "/v1/models";
         if (opts.capability) {
             path += `?capability=${encodeURIComponent(opts.capability)}`;
         }
-        const resp = await this.transport.getJSON(path, init);
+        // The catalogue is public: no token, so listing models never sends a
+        // signed-out user to sign in.
+        const resp = await this.transport.getPublicJSON(path, init);
         return resp.data;
     }
 }

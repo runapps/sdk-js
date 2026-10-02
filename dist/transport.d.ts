@@ -73,6 +73,12 @@ export declare class Transport {
     getJSON<T>(path: string, init?: {
         signal?: AbortSignal;
     }): Promise<T>;
+    /** GET a public path: no Authorization header, so it never fetches a
+     *  token — in browser sign-in mode that would send a signed-out user to
+     *  the sign-in page just to read the model catalogue. */
+    getPublicJSON<T>(path: string, init?: {
+        signal?: AbortSignal;
+    }): Promise<T>;
     /** GET path; return raw bytes + content-type (for video/audio downloads)
      *  and the ETag of those bytes, when the server sends one. */
     getRaw(path: string, init?: {

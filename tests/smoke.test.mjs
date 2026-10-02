@@ -149,3 +149,34 @@ test("APIError is thrown for non-2xx", async () => {
       err.message.includes("too many"),
   );
 });
+
+test("models.list needs no token: no Authorization header, no sign-in redirect", async () => {
+  const saved = { window: globalThis.window, location: globalThis.location, history: globalThis.history };
+  let assigned = null;
+  globalThis.window = globalThis;
+  globalThis.location = {
+    hash: "", pathname: "/", search: "", origin: "https://demo.runapps.dev", hostname: "demo.runapps.dev",
+    href: "https://demo.runapps.dev/", assign(u) { assigned = u; }, replace(u) { assigned = u; },
+  };
+  globalThis.history = { replaceState() {} };
+  const seen = [];
+  const fakeFetch = async (input, init) => {
+    seen.push({ url: String(input), headers: new Headers(init?.headers ?? {}) });
+    return new Response(JSON.stringify({ data: [{ id: "QwenPlus" }] }), {
+      status: 200, headers: { "content-type": "application/json" },
+    });
+  };
+  try {
+    const client = new RunJobs({ showIdentityBadge: false, fetch: fakeFetch });
+    const models = await client.models.list({ capability: "text" });
+    assert.equal(models[0].id, "QwenPlus");
+    assert.equal(seen.length, 1);
+    assert.match(seen[0].url, /^https:\/\/www\.runapps\.ai\/v1\/models\?capability=text$/);
+    assert.equal(seen[0].headers.get("authorization"), null, "no bearer token sent");
+    assert.equal(assigned, null, "no redirect to the sign-in page");
+  } finally {
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete globalThis[k]; else globalThis[k] = v;
+    }
+  }
+});

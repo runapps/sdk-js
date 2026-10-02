@@ -272,7 +272,7 @@ const all = await client.models.list();
 const video = await client.models.list({ capability: "video_generation" });
 ```
 
-`GET /v1/models` needs no key. Token prices are in pips per million tokens, where 1 USD is 1,000,000 pips. Each model carries `capability_tags`, such as `t2v`, `i2v`, `voice_clone` or `timestamps`; filter with `hasCapabilityTag`. Chat models list `input_modalities`; check with `acceptsModality`. Every model describes its accepted options through `getOptionsSchema(model)`: fields, bounds, enums, cross-field rules, and a catalogue of voices or emotions. `validateRequest(schema, body)` returns every problem at once for a form to show. Live prices are also on the [pricing page](https://www.runapps.ai/pricing).
+`client.models.list()` and `GET /v1/models` need no key or sign-in, so an app can show its model choices before the user signs in. Token prices are in pips per million tokens, where 1 USD is 1,000,000 pips. Each model carries `capability_tags`, such as `t2v`, `i2v`, `voice_clone` or `timestamps`; filter with `hasCapabilityTag`. Chat models list `input_modalities`; check with `acceptsModality`. Every model describes its accepted options through `getOptionsSchema(model)`: fields, bounds, enums, cross-field rules, and a catalogue of voices or emotions. `validateRequest(schema, body)` returns every problem at once for a form to show. Live prices are also on the [pricing page](https://www.runapps.ai/pricing).
 
 ## Image, audio, video, embeddings
 

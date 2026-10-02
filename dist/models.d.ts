@@ -79,7 +79,7 @@ export declare class ModelsService {
     constructor(transport: Transport);
     /**
      * List models available on the gateway. Pass `{ capability: "..." }` to
-     * filter server-side.
+     * filter server-side. Needs no sign-in or key.
      */
     list(opts?: ModelListOptions, init?: {
         signal?: AbortSignal;
