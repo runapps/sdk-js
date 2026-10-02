@@ -63,7 +63,7 @@ client.auth?.hasFreshToken();        // avoid showing a "sign in" button needles
 
 `showIdentityBadge` (default `true`) draws a small activity badge; `badgePosition` places it.
 
-`project` is optional on `*.runapps.dev` — the origin already says which app it is. It is required on any other origin (localhost, your own domain) and when the client runs on a personal key (see below). In Node, `authProvider: "runapps"` is a no-op; use `apiKey`.
+`project` is optional on `*.runapps.dev` — the origin already says which app it is. It is required on localhost and when the client runs on a personal key (see below). Sign-in only works on the app's own `*.runapps.dev` address and on `http://localhost`. In Node, `authProvider: "runapps"` is a no-op; use `apiKey`.
 
 ### 3. Private prompts
 
