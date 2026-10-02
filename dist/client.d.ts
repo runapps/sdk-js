@@ -91,7 +91,7 @@ export interface ClientOptions {
  * Browser bundle (resource projects on runapps.ai):
  *
  * ```html
- * <script src="https://cdn.jsdelivr.net/npm/@runjobsai/sdk/dist/sdk.umd.js"></script>
+ * <script src="https://cdn.jsdelivr.net/npm/@runappsai/sdk/dist/sdk.umd.js"></script>
  * <script>
  *   const client = new RunApps.Client({ authProvider: "runapps" });
  *   const res = await client.chat.create({
@@ -104,7 +104,7 @@ export interface ClientOptions {
  * Node / server-side:
  *
  * ```ts
- * import { RunApps } from "@runjobsai/sdk";
+ * import { RunApps } from "@runappsai/sdk";
  * const client = new RunApps({ apiKey: process.env.RUNJOBS_API_KEY! });
  * ```
  */

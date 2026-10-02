@@ -3,7 +3,7 @@ import { defineConfig } from "tsup";
 // IIFE bundle for browser <script> tags.  Exposes window.RunApps
 // as a constructor (alias for RunAppsClient) plus the namespace.
 //
-//   <script src="https://cdn.jsdelivr.net/npm/@runjobsai/sdk/dist/sdk.umd.js"></script>
+//   <script src="https://cdn.jsdelivr.net/npm/@runappsai/sdk/dist/sdk.umd.js"></script>
 //   <script>
 //     const client = new RunApps.Client({ authProvider: "runjobs" });
 //   </script>

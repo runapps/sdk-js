@@ -1,4 +1,4 @@
-# Publishes @runjobsai/sdk to npm on a version tag (v0.1.2 → 0.1.2).
+# Publishes @runappsai/sdk to npm on a version tag (v0.3.1 → 0.3.1).
 #
 # Auth is npm trusted publishing: npm trusts this repository's workflow
 # through GitHub's OIDC token, so there is no npm token or 2FA code in
@@ -6,6 +6,10 @@
 # attestation linking it to the commit it was built from. The publisher
 # is registered on npmjs.com under the package's settings — owner
 # `runjobsai`, repository `sdk-js`, workflow `publish.yml`.
+#
+# A version that is already on npm (e.g. a first release published by
+# hand, before the package existed to register a trusted publisher) is
+# skipped, so tagging it later does not fail.
 name: publish
 
 on:
@@ -38,7 +42,18 @@ jobs:
           tag="${GITHUB_REF_NAME#v}"
           pkg="$(node -p "require('./package.json').version")"
           [ "$tag" = "$pkg" ] || { echo "tag v$tag but package.json says $pkg"; exit 1; }
+      - name: skip if this version is already published
+        id: published
+        run: |
+          name="$(node -p "require('./package.json').name")"
+          ver="$(node -p "require('./package.json').version")"
+          if npm view "$name@$ver" version >/dev/null 2>&1; then
+            echo "$name@$ver is already on npm; nothing to publish"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
       - run: npm test
+        if: steps.published.outputs.skip != 'true'
       # verbose: npm's OIDC exchange with the registry is otherwise silent,
       # and a mismatch surfaces only as ENEEDAUTH.
       - run: npm publish --access public --loglevel verbose
+        if: steps.published.outputs.skip != 'true'

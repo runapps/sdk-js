@@ -10,13 +10,13 @@ Two ways to use it:
 ## Install
 
 ```bash
-npm install @runjobsai/sdk
+npm install @runappsai/sdk
 ```
 
 Or as a script tag:
 
 ```html
-<script src="https://cdn.jsdelivr.net/npm/@runjobsai/sdk/dist/sdk.umd.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@runappsai/sdk/dist/sdk.umd.js"></script>
 <script>
   const client = new RunApps({ authProvider: "runapps" });
 </script>
@@ -29,7 +29,7 @@ Or as a script tag:
 An app gets its slug the moment you create it on the dashboard (Creator → Publish) — no zip needed yet. Pass that slug as `project` and your dev server runs against the real platform:
 
 ```ts
-import { RunApps } from "@runjobsai/sdk";
+import { RunApps } from "@runappsai/sdk";
 
 const client = new RunApps({
   authProvider: "runapps",   // sign-in, token, refresh — all handled
@@ -133,7 +133,7 @@ try {
 ## From your own code
 
 ```ts
-import { RunApps, APIError } from "@runjobsai/sdk";
+import { RunApps, APIError } from "@runappsai/sdk";
 
 const client = new RunApps({ apiKey: "rk_…" });   // Dashboard → API Keys
 
@@ -172,7 +172,7 @@ for await (const chunk of client.chat.stream({ model: "Gemini 3 Flash", messages
 **Images, video and audio in messages** — check the model first with `acceptsModality(model, "video")`; the gateway rejects unsupported parts with a 400 before billing:
 
 ```ts
-import { userMessageParts, textPart, imagePart, videoPart, audioPart } from "@runjobsai/sdk";
+import { userMessageParts, textPart, imagePart, videoPart, audioPart } from "@runappsai/sdk";
 
 await client.chat.create({
   model: "Gemini 3 Vision",
@@ -185,7 +185,7 @@ await client.chat.create({
 **Server tools** — the platform searches and reads the web for the model, looping until it answers; your code only sees the result. Combine freely with your own `tools`.
 
 ```ts
-import { ServerTools } from "@runjobsai/sdk";
+import { ServerTools } from "@runappsai/sdk";
 
 const resp = await client.chat.create({
   model: "Claude Sonnet 4.6",
