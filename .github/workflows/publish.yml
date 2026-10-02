@@ -5,7 +5,7 @@
 # the repo or its secrets, and every release carries a provenance
 # attestation linking it to the commit it was built from. The publisher
 # is registered on npmjs.com under the package's settings — owner
-# `runjobsai`, repository `sdk-js`, workflow `publish.yml`.
+# `runapps`, repository `sdk-js`, workflow `publish.yml`.
 #
 # A version that is already on npm (e.g. a first release published by
 # hand, before the package existed to register a trusted publisher) is

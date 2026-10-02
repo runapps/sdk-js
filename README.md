@@ -10,7 +10,7 @@ Two ways to use it:
 ## Install
 
 ```bash
-npm install @runappsai/sdk
+npm i @runappsai/sdk
 ```
 
 Or as a script tag:
