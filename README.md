@@ -26,7 +26,7 @@ Or as a script tag:
 
 ### 1. Create the app, then develop against it
 
-An app gets its slug the moment you create it on the dashboard (创作者 → 发布) — no zip needed yet. Pass that slug as `project` and your dev server runs against the real platform:
+An app gets its slug the moment you create it on the dashboard (Creator → Publish) — no zip needed yet. Pass that slug as `project` and your dev server runs against the real platform:
 
 ```ts
 import { RunApps } from "@runjobsai/sdk";
@@ -67,7 +67,7 @@ client.auth?.hasFreshToken();        // avoid showing a "sign in" button needles
 
 ### 3. Private prompts
 
-Anything in your frontend can be read in the browser. Put prompts in `bundle.json (or .runapps/prompts/)<id>.md` inside your zip — the platform never serves that folder — and call them by name:
+Anything in your frontend can be read in the browser. Name your prompt files in a `bundle.json` at the root of your zip — `{"prompts": {"outline": "prompts/outline.md"}}` — or put them under `.runapps/prompts/<id>.md`. The platform never serves `bundle.json`, the files it names, or any dot folder; call the prompts by id:
 
 ```ts
 await client.chat.create({
@@ -144,22 +144,16 @@ const resp = await client.chat.create({
 console.log(resp.usage.total_cost);   // USD
 ```
 
-The default base URL is `https://api.runapps.ai`; a browser client on `authProvider: "runapps"` uses `https://www.runapps.ai`. Both accept `baseURL`.
+The base URL is `https://www.runapps.ai` in both modes; `baseURL` overrides it.
 
 **Files with a personal key** — a personal key has no app of its own, so name the app: `new RunApps({ apiKey, project: "my-tool" })`. You get your own files in that app, the same ones the app sees for you, provided you have added the app or created it.
 
-**Any OpenAI- or Anthropic-compatible SDK works too.** Point it at the gateway with your `rk_…` key:
+**Any OpenAI-compatible SDK works too.** Point it at the platform with your `rk_…` key:
 
 ```python
 from openai import OpenAI
 client = OpenAI(api_key="rk_...", base_url="https://www.runapps.ai/v1")
 client.chat.completions.create(model="Claude Sonnet 4.6", messages=[{"role": "user", "content": "Hello!"}])
-```
-
-```python
-from anthropic import Anthropic
-client = Anthropic(api_key="rk_...", base_url="https://www.runapps.ai")
-client.messages.create(model="Claude Sonnet 4.6", max_tokens=1024, messages=[{"role": "user", "content": "Hello!"}])
 ```
 
 Browse `GET /v1/models` (no auth) for the live catalogue and per-model prices.

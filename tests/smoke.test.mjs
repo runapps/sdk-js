@@ -86,7 +86,7 @@ test("Model option helpers handle missing / typed fields", () => {
   assert.equal(defaultVoice(empty), null);
 });
 
-test("Default base URL is https://api.runapps.ai", () => {
+test("Default base URL is https://www.runapps.ai", () => {
   // Construct with a fake fetch that captures the URL — verifies baseURL plumbing.
   const seen = { url: "" };
   const fakeFetch = async (input, _init) => {
@@ -98,7 +98,7 @@ test("Default base URL is https://api.runapps.ai", () => {
   };
   const client = new RunJobs({ apiKey: "gw-test", fetch: fakeFetch });
   return client.models.list().then(() => {
-    assert.match(seen.url, /^https:\/\/api\.runapps\.ai\/v1\/models/);
+    assert.match(seen.url, /^https:\/\/www\.runapps\.ai\/v1\/models/);
   });
 });
 

@@ -10,7 +10,10 @@ import { EmbeddingsService } from "./embeddings.js";
 import { BrowserAuth, type BrowserUser } from "./browser-auth.js";
 import { SDKEvents } from "./events.js";
 
-const DEFAULT_BASE_URL = "https://api.runapps.ai";
+// The platform, not the bare gateway: personal rk_ keys are checked and
+// billed by www.runapps.ai, which forwards to the gateway. api.runapps.ai
+// only knows the gateway's own keys.
+const DEFAULT_BASE_URL = "https://www.runapps.ai";
 
 /**
  * Auth strategy.
@@ -86,9 +89,8 @@ export interface ClientOptions {
    * pair.
    */
   project?: string;
-  /** Override the default gateway base URL.  Defaults to
-   *  `https://api.runapps.ai`, or `https://www.runapps.ai` when
-   *  `authProvider: "runapps"` is set. */
+  /** Override the default base URL, `https://www.runapps.ai` (the
+   *  platform: personal keys and app tokens are both accepted there). */
   baseURL?: string;
   /** Optional fetch override (e.g. node-fetch with custom agent). */
   fetch?: typeof fetch;
@@ -156,9 +158,8 @@ export class RunApps {
     let onUnauthorized: (() => void) | undefined;
 
     if (provider === "runapps" || provider === "runjobs") {
-      // Default the gateway origin to runapps.ai for the runjobs
-      // auth flow — that's where /api/sdk/grant lives.  Users overriding
-      // baseURL explicitly (e.g. self-hosted runjobs) keep control.
+      // The grant page (/api/sdk/grant) and the gateway both live on
+      // www.runapps.ai.  An explicit baseURL keeps control.
       baseURL = baseURL ?? "https://www.runapps.ai";
       // Badge default: SHOWN. The badge is now a real-time activity
       // indicator (LED + ring + popover) — useful enough that we'd

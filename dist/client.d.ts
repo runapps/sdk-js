@@ -79,9 +79,8 @@ export interface ClientOptions {
      * pair.
      */
     project?: string;
-    /** Override the default gateway base URL.  Defaults to
-     *  `https://api.runapps.ai`, or `https://www.runapps.ai` when
-     *  `authProvider: "runapps"` is set. */
+    /** Override the default base URL, `https://www.runapps.ai` (the
+     *  platform: personal keys and app tokens are both accepted there). */
     baseURL?: string;
     /** Optional fetch override (e.g. node-fetch with custom agent). */
     fetch?: typeof fetch;
