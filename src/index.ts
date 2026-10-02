@@ -6,6 +6,8 @@
  * reaching into per-service modules.
  */
 
+// `RunJobs` is a deprecated alias of `RunApps`, kept for code written
+// before the rename.
 export { RunApps, RunApps as Client, RunApps as RunJobs, type ClientOptions, type AuthProvider } from "./client.js";
 
 // SDK telemetry — `client.events` fires these around every LLM-ish

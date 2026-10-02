@@ -165,7 +165,8 @@ export declare class BrowserAuth {
     private markSignedOut;
     private clearSignedOut;
     private removeBadge;
-    /** Parse the #runjobs_token=… fragment, install, then strip it. */
+    /** Parse the #runapps_token=… fragment (or the older #runjobs_token=…),
+     *  install, then strip it. */
     private consumeFragment;
     /** postMessage handshake with the dashboard parent (iframe path). */
     private requestTokenFromParent;

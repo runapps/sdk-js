@@ -153,7 +153,7 @@ export class ActivityTracker {
         h();
       } catch (err) {
         // eslint-disable-next-line no-console
-        console.error("[runjobs sdk] ActivityTracker onChange listener threw:", err);
+        console.error("[runapps sdk] ActivityTracker onChange listener threw:", err);
       }
     }
   }

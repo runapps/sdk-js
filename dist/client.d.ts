@@ -39,7 +39,7 @@ export interface ClientOptions {
      */
     authProvider?: AuthProvider;
     /**
-     * Show the floating identity badge in `runjobs` auth mode.
+     * Show the floating identity badge in `runapps` auth mode.
      * **Default `true`** — the badge is now a desktop-ball-style
      * real-time activity indicator (LED dot + progress ring around
      * the avatar + click-through popover with active calls / recent
@@ -105,7 +105,7 @@ export interface ClientOptions {
  *
  * ```ts
  * import { RunApps } from "@runappsai/sdk";
- * const client = new RunApps({ apiKey: process.env.RUNJOBS_API_KEY! });
+ * const client = new RunApps({ apiKey: process.env.RUNAPPS_API_KEY! });
  * ```
  */
 export declare class RunApps {

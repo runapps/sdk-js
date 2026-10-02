@@ -33,7 +33,7 @@ const DEFAULT_BASE_URL = "https://www.runapps.ai";
  *
  * ```ts
  * import { RunApps } from "@runappsai/sdk";
- * const client = new RunApps({ apiKey: process.env.RUNJOBS_API_KEY! });
+ * const client = new RunApps({ apiKey: process.env.RUNAPPS_API_KEY! });
  * ```
  */
 export class RunApps {

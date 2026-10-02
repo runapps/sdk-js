@@ -6,7 +6,7 @@
 // from the same template requested the very same
 // `/v1/files/projects/index.json`.  The browser's HTTP cache does not
 // key on request headers and is partitioned by registrable domain, so
-// all `*.runjobs.dev` bundles share one partition.  One cacheable
+// all `*.runapps.dev` bundles share one partition.  One cacheable
 // response was enough for app A to read app B's index and then persist
 // it as its own.
 //

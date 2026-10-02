@@ -19,7 +19,7 @@
  *
  * @example
  * ```ts
- * import { encodeImageUrl } from "@runjobs/sdk";
+ * import { encodeImageUrl } from "@runappsai/sdk";
  * const png = await fs.readFile("frame.png");
  * await client.video.generate("Veo 3.1", {
  *   prompt: "...",
@@ -63,7 +63,7 @@ export function encodeImageUrl(bytes) {
  *
  * @example
  * ```ts
- * import { decodeMediaUrl } from "@runjobs/sdk";
+ * import { decodeMediaUrl } from "@runappsai/sdk";
  * const job = await client.image.generateAsync("Seedream 5.0", {...});
  * const { bytes, contentType } = await decodeMediaUrl(job.data[0].url);
  * await fs.writeFile("out.png", bytes);

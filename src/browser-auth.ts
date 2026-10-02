@@ -1,19 +1,19 @@
 // browser-auth.ts — opt-in runapps.ai auth flow for browser bundles.
 //
-// Activated by `new RunApps({ authProvider: "runjobs", baseURL: "..." })`.
+// Activated by `new RunApps({ authProvider: "runapps", baseURL: "..." })`.
 // In Node and other non-window environments this module's runtime code
 // short-circuits to no-ops; it ships with the IIFE bundle for resource
 // bundles loaded via <script> tag.
 //
 // Responsibilities:
-//   - Detect & consume `#runjobs_token=…` URL fragment planted by the
+//   - Detect & consume the `#runapps_token=…` URL fragment planted by the
 //     grant page after a successful sign-in.
 //   - Trigger a redirect-based grant flow when the bundle calls a
 //     gateway endpoint without a fresh token.
-//   - In iframe contexts (the runjobs dashboard embedding), handshake
+//   - In iframe contexts (a RunApps page embedding the app), handshake
 //     with the parent via postMessage to silently obtain a token.
 //   - Render an unobtrusive identity badge in the bottom-right corner
-//     so the end user can see WHICH runjobs account is paying for the
+//     so the end user can see WHICH RunApps account is paying for the
 //     calls being made on their behalf.
 //
 // Why redirect (not popup): under COOP=same-origin (required so the
@@ -103,7 +103,10 @@ const TOKEN_REFRESH_MARGIN_S = 60;
 // project (iframe / parent-handshake mode) fall back to the legacy
 // unsuffixed key, which preserves back-compat for already-persisted
 // tokens after upgrade.
-const STORAGE_KEY_BASE = "__runjobs_auth_v1__";
+const STORAGE_KEY_BASE = "__runapps_auth_v1__";
+// Written by SDK 0.3 and earlier; read once and migrated, so an upgrade
+// keeps the user signed in.
+const LEGACY_STORAGE_KEY_BASE = "__runjobs_auth_v1__";
 // Set when the user clicks "Sign out".  While present, getToken() must
 // not silently redirect to the grant page even though the user still
 // has a runapps.ai cookie — otherwise the backend's auto-grant turns
@@ -111,7 +114,8 @@ const STORAGE_KEY_BASE = "__runjobs_auth_v1__";
 // signIn() so the user can come back.  Same per-project namespacing
 // rationale as STORAGE_KEY_BASE — signing out of bundle A shouldn't
 // also sign out bundle B that happens to share the origin.
-const SIGNED_OUT_KEY_BASE = "__runjobs_signed_out_v1__";
+const SIGNED_OUT_KEY_BASE = "__runapps_signed_out_v1__";
+const LEGACY_SIGNED_OUT_KEY_BASE = "__runjobs_signed_out_v1__";
 
 /** Compose the localStorage key for an auth slot.  `null` project
  *  yields the base key (iframe-mode and pre-v1.x bundles), which
@@ -123,6 +127,14 @@ function storageKey(project: string | null): string {
 /** Same as storageKey, for the sticky sign-out flag. */
 function signedOutKey(project: string | null): string {
   return project ? `${SIGNED_OUT_KEY_BASE}:${project}` : SIGNED_OUT_KEY_BASE;
+}
+
+function legacyStorageKey(project: string | null): string {
+  return project ? `${LEGACY_STORAGE_KEY_BASE}:${project}` : LEGACY_STORAGE_KEY_BASE;
+}
+
+function legacySignedOutKey(project: string | null): string {
+  return project ? `${LEGACY_SIGNED_OUT_KEY_BASE}:${project}` : LEGACY_SIGNED_OUT_KEY_BASE;
 }
 
 interface PersistedAuth {
@@ -398,6 +410,9 @@ export class BrowserAuth {
     params.set("redirect_to", args.redirectTo);
     params.set("scheme", args.scheme);
     if (this.project) params.set("project_id", this.project);
+    // Ask for #runapps_token=…; a platform that predates it answers with
+    // #runjobs_token=…, which consumeFragment also accepts.
+    params.set("token_name", "runapps_token");
     return this.origin + "/api/sdk/grant?" + params.toString();
   }
 
@@ -454,8 +469,14 @@ export class BrowserAuth {
   private loadPersisted() {
     if (typeof localStorage === "undefined") return;
     try {
-      const raw = localStorage.getItem(storageKey(this.project));
-      if (!raw) return;
+      let raw = localStorage.getItem(storageKey(this.project));
+      if (!raw) {
+        // Upgrade from SDK 0.3 or earlier: move the token to the new key.
+        raw = localStorage.getItem(legacyStorageKey(this.project));
+        if (!raw) return;
+        localStorage.setItem(storageKey(this.project), raw);
+        localStorage.removeItem(legacyStorageKey(this.project));
+      }
       const data = JSON.parse(raw) as Partial<PersistedAuth>;
       if (!data.token || !data.origin) return;
       // Pin to the gateway origin we were constructed with — a bundle
@@ -480,13 +501,15 @@ export class BrowserAuth {
     if (typeof localStorage === "undefined") return;
     try {
       localStorage.removeItem(storageKey(this.project));
+      localStorage.removeItem(legacyStorageKey(this.project));
     } catch { /* ignore */ }
   }
 
   private isSignedOut(): boolean {
     if (typeof localStorage === "undefined") return false;
     try {
-      return localStorage.getItem(signedOutKey(this.project)) === "1";
+      return localStorage.getItem(signedOutKey(this.project)) === "1" ||
+        localStorage.getItem(legacySignedOutKey(this.project)) === "1";
     } catch { return false; }
   }
 
@@ -501,17 +524,19 @@ export class BrowserAuth {
     if (typeof localStorage === "undefined") return;
     try {
       localStorage.removeItem(signedOutKey(this.project));
+      localStorage.removeItem(legacySignedOutKey(this.project));
     } catch { /* ignore */ }
   }
 
   private removeBadge() {
     if (typeof document === "undefined") return;
-    document.getElementById("__runjobs_identity__")?.remove();
+    document.getElementById("__runapps_identity__")?.remove();
   }
 
-  /** Parse the #runjobs_token=… fragment, install, then strip it. */
+  /** Parse the #runapps_token=… fragment (or the older #runjobs_token=…),
+   *  install, then strip it. */
   private consumeFragment(): boolean {
-    if (!location.hash || location.hash.indexOf("runjobs_token=") < 0)
+    if (!location.hash || !/(^#|&)run(apps|jobs)_token=/.test(location.hash))
       return false;
     const params: Record<string, string> = {};
     location.hash
@@ -521,7 +546,8 @@ export class BrowserAuth {
         const i = kv.indexOf("=");
         if (i >= 0) params[decodeURIComponent(kv.slice(0, i))] = decodeURIComponent(kv.slice(i + 1));
       });
-    if (!params.runjobs_token) return false;
+    const token = params.runapps_token || params.runjobs_token;
+    if (!token) return false;
     let user: BrowserUser | undefined;
     if (params.user) {
       try {
@@ -531,7 +557,7 @@ export class BrowserAuth {
       }
     }
     this.setToken(
-      params.runjobs_token,
+      token,
       parseInt(params.expires_at ?? "", 10) || 0,
       user,
     );
@@ -559,7 +585,7 @@ export class BrowserAuth {
         const data = e.data as
           | { type: string; token?: string; expires_at?: number; user?: BrowserUser }
           | null;
-        if (data && data.type === "runjobs:token" && data.token) {
+        if (data && (data.type === "runapps:token" || data.type === "runjobs:token") && data.token) {
           this.setToken(data.token, data.expires_at ?? 0, data.user);
           cleanup();
           resolve();
@@ -576,7 +602,8 @@ export class BrowserAuth {
       const post = () => {
         if (done) return;
         try {
-          window.parent.postMessage({ type: "runjobs:request-token" }, this.origin);
+          window.parent.postMessage({ type: "runapps:request-token" }, this.origin);
+          window.parent.postMessage({ type: "runjobs:request-token" }, this.origin); // older embedders
         } catch (err) {
           cleanup();
           reject(err);
@@ -604,7 +631,7 @@ export class BrowserAuth {
    *  can't reach back into the bundle window via `window.opener`. */
   private renderBadge() {
     if (typeof document === "undefined" || !this.userInfo) return;
-    const ID = "__runjobs_identity__";
+    const ID = "__runapps_identity__";
     const dashboardUrl = `${this.origin}/dashboard`;
     const ready = (cb: () => void) =>
       document.body ? cb() : document.addEventListener("DOMContentLoaded", cb);
@@ -689,7 +716,7 @@ interface MountOpts {
  * downward); `right` vs `left` flips horizontal anchor on both.
  */
 /**
- * Inject the `@keyframes __runjobs_led_pulse__` rule into the document
+ * Inject the `@keyframes __runapps_led_pulse__` rule into the document
  * head ONCE (idempotent — re-mounts and multiple SDK instances on the
  * same page share the same rule). Must run at badge mount time so
  * the LED's `animation` CSS resolves the keyframe reference the
@@ -699,11 +726,11 @@ interface MountOpts {
  */
 function ensurePulseKeyframes(): void {
   if (typeof document === "undefined") return;
-  if (document.getElementById("__runjobs_kf__")) return;
+  if (document.getElementById("__runapps_kf__")) return;
   const style = document.createElement("style");
-  style.id = "__runjobs_kf__";
+  style.id = "__runapps_kf__";
   style.textContent =
-    "@keyframes __runjobs_led_pulse__ {" +
+    "@keyframes __runapps_led_pulse__ {" +
     "  0%   { box-shadow: 0 0 0 0   rgba(59,130,246,0.7); }" +
     "  70%  { box-shadow: 0 0 0 6px rgba(59,130,246,0);   }" +
     "  100% { box-shadow: 0 0 0 0   rgba(59,130,246,0);   }" +
@@ -740,7 +767,8 @@ function badgeCornerStyles(position: BadgePosition): {
 
 /** Cookie key the saved badge position lives under. URI-safe, prefixed
  *  so other libraries / consumers don't accidentally collide. */
-const BADGE_POS_COOKIE = "__runjobs_badge_pos__";
+const BADGE_POS_COOKIE = "__runapps_badge_pos__";
+const LEGACY_BADGE_POS_COOKIE = "__runjobs_badge_pos__";
 
 /** Pixel threshold a pointer must travel before we treat the gesture
  *  as a drag instead of a click. Below this, it's a normal badge tap
@@ -754,12 +782,15 @@ const BADGE_EDGE_INSET_PX = 8;
 
 function readBadgePosCookie(): { x: number; y: number } | null {
   if (typeof document === "undefined") return null;
-  const raw = document.cookie
-    .split(";")
-    .map((s) => s.trim())
-    .find((s) => s.startsWith(BADGE_POS_COOKIE + "="));
+  const cookies = document.cookie.split(";").map((s) => s.trim());
+  let name = BADGE_POS_COOKIE;
+  let raw = cookies.find((s) => s.startsWith(name + "="));
+  if (!raw) {
+    name = LEGACY_BADGE_POS_COOKIE;
+    raw = cookies.find((s) => s.startsWith(name + "="));
+  }
   if (!raw) return null;
-  const value = decodeURIComponent(raw.slice(BADGE_POS_COOKIE.length + 1));
+  const value = decodeURIComponent(raw.slice(name.length + 1));
   const parts = value.split(",");
   const rawX = parts[0];
   const rawY = parts[1];
@@ -1322,7 +1353,7 @@ function updateLED(led: HTMLSpanElement, snap: ActivitySnapshot): void {
       // CSS-driven pulse via box-shadow ring expanding outward —
       // single keyframe loop, cheaper than animating opacity.
       led.style.boxShadow = "0 0 0 0 rgba(59,130,246,0.7)";
-      led.style.animation = "__runjobs_led_pulse__ 1.2s ease-out infinite";
+      led.style.animation = "__runapps_led_pulse__ 1.2s ease-out infinite";
       break;
     case "error":
       led.style.background = "#ef4444";
@@ -1353,14 +1384,14 @@ function createPopover(dashboardUrl: string, anchorCss: string, onSignOut: () =>
     "cursor:default",
     "text-align:left",
   ].join(";");
-  pop.setAttribute("data-runjobs-popover", "1");
+  pop.setAttribute("data-runapps-popover", "1");
   pop.addEventListener("click", (e) => e.stopPropagation());
 
   // The popover's content is rebuilt on every redraw to keep DOM
   // diffing simple. ~3 sections × ~6 children = ~20 nodes, no
   // measurable cost at the 6 Hz redraw rate.
   const inner = document.createElement("div");
-  inner.setAttribute("data-runjobs-popover-content", "1");
+  inner.setAttribute("data-runapps-popover-content", "1");
   pop.appendChild(inner);
 
   const footer = document.createElement("div");
@@ -1411,7 +1442,7 @@ function createPopover(dashboardUrl: string, anchorCss: string, onSignOut: () =>
 }
 
 function updatePopover(pop: HTMLDivElement, snap: ActivitySnapshot): void {
-  const inner = pop.querySelector('[data-runjobs-popover-content]') as HTMLDivElement | null;
+  const inner = pop.querySelector('[data-runapps-popover-content]') as HTMLDivElement | null;
   if (!inner) return;
   inner.innerHTML = "";
   const now = Date.now();

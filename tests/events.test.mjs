@@ -1,6 +1,6 @@
 // Test the typed event bus + activity tracker that feed the
 // bottom-right badge's real-time activity ring. The SDK ships these
-// as building blocks; runjobs.ai (and any embedder) reads
+// as building blocks; the platform (and any embedder) reads
 // `client.events` and `client.activitySnapshot()` to render
 // the desktop-ball-style live indicator.
 //

@@ -1,4 +1,4 @@
-// Verifies the URL the SDK redirects to during runjobs auth.  Owned
+// Verifies the URL the SDK redirects to during RunApps sign-in.  Owned
 // by browser-auth.ts; covered here because the grant URL is the
 // gateway's contract surface — a typo in a query-param name silently
 // breaks every dev-time login flow.
@@ -9,26 +9,29 @@ import assert from "node:assert/strict";
 import { BrowserAuth } from "../dist/index.js";
 
 test("grant URL omits project_id when no project pinned", () => {
-  const auth = new BrowserAuth({ origin: "https://www.runjobs.ai" });
+  const auth = new BrowserAuth({ origin: "https://www.runapps.ai" });
   const url = auth._buildGrantUrlForTest({
-    pageOrigin: "https://my-bundle.runjobs.ai",
-    app: "my-bundle.runjobs.ai",
-    redirectTo: "https://my-bundle.runjobs.ai/",
+    pageOrigin: "https://my-bundle.runapps.dev",
+    app: "my-bundle.runapps.dev",
+    redirectTo: "https://my-bundle.runapps.dev/",
     scheme: "light",
   });
   const parsed = new URL(url);
-  assert.equal(parsed.origin, "https://www.runjobs.ai");
+  assert.equal(parsed.origin, "https://www.runapps.ai");
   assert.equal(parsed.pathname, "/api/sdk/grant");
-  assert.equal(parsed.searchParams.get("origin"), "https://my-bundle.runjobs.ai");
-  assert.equal(parsed.searchParams.get("app"), "my-bundle.runjobs.ai");
-  assert.equal(parsed.searchParams.get("redirect_to"), "https://my-bundle.runjobs.ai/");
+  assert.equal(parsed.searchParams.get("origin"), "https://my-bundle.runapps.dev");
+  assert.equal(parsed.searchParams.get("app"), "my-bundle.runapps.dev");
+  assert.equal(parsed.searchParams.get("redirect_to"), "https://my-bundle.runapps.dev/");
   assert.equal(parsed.searchParams.get("scheme"), "light");
   assert.equal(parsed.searchParams.has("project_id"), false);
+  // Ask the platform for #runapps_token=… (it answers #runjobs_token=…
+  // to older SDKs).
+  assert.equal(parsed.searchParams.get("token_name"), "runapps_token");
 });
 
 test("grant URL includes project_id when project pinned", () => {
   const auth = new BrowserAuth({
-    origin: "https://www.runjobs.ai",
+    origin: "https://www.runapps.ai",
     project: "storyflow",
   });
   const url = auth._buildGrantUrlForTest({
@@ -45,7 +48,7 @@ test("grant URL includes project_id when project pinned", () => {
 
 test("grant URL handles project ids with special chars (URL-encoded)", () => {
   const auth = new BrowserAuth({
-    origin: "https://www.runjobs.ai",
+    origin: "https://www.runapps.ai",
     project: "team/proj name",
   });
   const url = auth._buildGrantUrlForTest({
@@ -62,7 +65,7 @@ test("grant URL handles project ids with special chars (URL-encoded)", () => {
 });
 
 test("origin trailing slash is normalised away", () => {
-  const auth = new BrowserAuth({ origin: "https://www.runjobs.ai/" });
+  const auth = new BrowserAuth({ origin: "https://www.runapps.ai/" });
   const url = auth._buildGrantUrlForTest({
     pageOrigin: "http://localhost:5173",
     app: "localhost:5173",
@@ -70,5 +73,5 @@ test("origin trailing slash is normalised away", () => {
     scheme: "light",
   });
   // No double-slash before /api.
-  assert.match(url, /^https:\/\/www\.runjobs\.ai\/api\/sdk\/grant\?/);
+  assert.match(url, /^https:\/\/www\.runapps\.ai\/api\/sdk\/grant\?/);
 });

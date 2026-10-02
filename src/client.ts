@@ -27,8 +27,8 @@ const DEFAULT_BASE_URL = "https://www.runapps.ai";
  *     in browsers — in Node this falls back to throwing the same
  *     "missing apiKey" error you'd get with no auth config.
  */
-// "runapps" is the current name of the platform sign-in; "runjobs" is the
-// same thing under the name from before the rename.
+// "runapps" turns on the platform sign-in. "runjobs" is a deprecated
+// alias for it, kept so code written before the rename keeps working.
 export type AuthProvider = "static" | "runapps" | "runjobs";
 
 export interface ClientOptions {
@@ -49,7 +49,7 @@ export interface ClientOptions {
    */
   authProvider?: AuthProvider;
   /**
-   * Show the floating identity badge in `runjobs` auth mode.
+   * Show the floating identity badge in `runapps` auth mode.
    * **Default `true`** — the badge is now a desktop-ball-style
    * real-time activity indicator (LED dot + progress ring around
    * the avatar + click-through popover with active calls / recent
@@ -116,7 +116,7 @@ export interface ClientOptions {
  *
  * ```ts
  * import { RunApps } from "@runappsai/sdk";
- * const client = new RunApps({ apiKey: process.env.RUNJOBS_API_KEY! });
+ * const client = new RunApps({ apiKey: process.env.RUNAPPS_API_KEY! });
  * ```
  */
 export class RunApps {

@@ -14,8 +14,8 @@ export interface TransportOptions {
   apiKey?: string;
   /** Dynamic resolver — called immediately before each request. Use this
    *  when the token is short-lived and refreshed externally (e.g. running
-   *  inside a runjobs resource bundle that exposes
-   *  `window.runjobs.getToken()`). The result is awaited per request, so
+   *  inside an app bundle that exposes
+   *  its own `getToken()`). The result is awaited per request, so
    *  the caller can return a Promise that hits a token endpoint. Wins
    *  over `apiKey` when both are supplied. */
   apiKeyResolver?: () => string | Promise<string>;
