@@ -21,7 +21,7 @@ const DEFAULT_BASE_URL = "https://www.runapps.ai";
  * ```html
  * <script src="https://cdn.jsdelivr.net/npm/@runappsai/sdk/dist/sdk.umd.js"></script>
  * <script>
- *   const client = new RunApps.Client({ authProvider: "runapps" });
+ *   const client = new RunApps();
  *   const res = await client.chat.create({
  *     model: "gpt-4o-mini",
  *     messages: [{ role: "user", content: "hello" }],
@@ -66,7 +66,13 @@ export class RunApps {
      */
     events = new SDKEvents();
     constructor(options = {}) {
-        const provider = options.authProvider ?? "static";
+        // With no key and no explicit authProvider, a browser client uses the
+        // platform sign-in: `new RunApps()` is all an app needs. Elsewhere
+        // (Node, workers without a window) there is no one to sign in.
+        const provider = options.authProvider ??
+            (!options.apiKey && !options.apiKeyResolver && typeof window !== "undefined"
+                ? "runapps"
+                : "static");
         let apiKeyResolver = options.apiKeyResolver;
         let baseURL = options.baseURL;
         let onUnauthorized;
@@ -107,7 +113,7 @@ export class RunApps {
             onUnauthorized = () => auth.invalidate();
         }
         if (!options.apiKey && !apiKeyResolver) {
-            throw new Error("runapps: pass either `apiKey`, `apiKeyResolver`, or `authProvider: \"runapps\"`");
+            throw new Error("runapps: pass `apiKey` (or `apiKeyResolver`); outside a browser there is no sign-in to fall back to");
         }
         const transport = new Transport({
             baseURL: baseURL ?? DEFAULT_BASE_URL,

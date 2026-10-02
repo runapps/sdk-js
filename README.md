@@ -4,7 +4,7 @@
 
 There are two ways to use it:
 
-- **In an app you publish on RunApps.** Users sign in with their RunApps account and pay for their own usage. You never hold a key. This is `authProvider: "runapps"`.
+- **In an app you publish on RunApps.** Users sign in with their RunApps account and pay for their own usage. You never hold a key: create the client without one, `new RunApps()`, and it signs the user in.
 - **From your own code.** A server, script or CLI uses a personal API key (`rk_…`), billed to you.
 
 Both use the base URL `https://www.runapps.ai` and the same OpenAI-compatible API under `/v1`.
@@ -24,7 +24,7 @@ Or load it with a script tag, which defines the global `RunApps`:
 ```html
 <script src="https://cdn.jsdelivr.net/npm/@runappsai/sdk/dist/sdk.umd.js"></script>
 <script>
-  const client = new RunApps({ authProvider: "runapps" });
+  const client = new RunApps();   // no key: users sign in with RunApps
 </script>
 ```
 
@@ -40,8 +40,7 @@ Create the app on the dashboard, under **Creator → Publish**. It gets its slug
 import { RunApps } from "@runappsai/sdk";
 
 const client = new RunApps({
-  authProvider: "runapps",   // sign-in and tokens are handled for you
-  project: "my-tool",        // the draft's slug; it stays the same after you upload
+  project: "my-tool",   // the draft's slug; it stays the same after you upload
 });
 
 const resp = await client.chat.create({
@@ -71,7 +70,7 @@ client.auth?.hasFreshToken();        // avoid showing a "sign in" button needles
 
 The SDK holds one token per user per app. It draws a small activity badge while it works; turn it off with `showIdentityBadge: false`, or move it with `badgePosition`.
 
-`project` is optional on `*.runapps.dev`, where the address already says which app it is. It is required on localhost and when the client runs on a personal key. Sign-in only works on the app's own `*.runapps.dev` address and on `http://localhost`. In Node, `authProvider: "runapps"` does nothing; use `apiKey`.
+`project` is optional on `*.runapps.dev`, where the address already says which app it is. It is required on localhost and when the client runs on a personal key. Sign-in only works on the app's own `*.runapps.dev` address and on `http://localhost`. With no key, a browser client signs the user in on its own; outside a browser there is no one to sign in, so pass `apiKey`.
 
 ### 3. Private prompts
 
@@ -160,7 +159,7 @@ curl https://www.runapps.ai/v1/chat/completions \
   -d '{"model": "Claude Sonnet 4.6", "messages": [{"role": "user", "content": "Hello!"}]}'
 ```
 
-Never put an `rk_…` key in a frontend; an app on RunApps uses `authProvider: "runapps"`. `baseURL` overrides the base URL in either mode.
+Never put an `rk_…` key in a frontend; an app on RunApps creates its client without a key. `baseURL` overrides the base URL in either mode.
 
 ## Chat
 
@@ -399,7 +398,7 @@ Helpers: `hasCapabilityTag`, `acceptsModality`, `getOptionsSchema`, `acceptsFiel
 
 ### Upgrading from `@runjobsai/sdk`
 
-The package was renamed. Install `@runappsai/sdk` and change your imports; the API is the same. Users signed in with 0.2.1 or later stay signed in after the upgrade. `RunJobs` and `authProvider: "runjobs"` still work as deprecated aliases of `RunApps` and `authProvider: "runapps"`.
+The package was renamed. Install `@runappsai/sdk` and change your imports; the API is the same. Users signed in with 0.2.1 or later stay signed in after the upgrade. `authProvider` no longer needs to be set: a browser client without a key signs the user in. `RunJobs` still works as a deprecated alias of `RunApps`, and so does `authProvider: "runjobs"`.
 
 ## License
 

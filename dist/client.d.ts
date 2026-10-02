@@ -22,8 +22,8 @@ import { SDKEvents } from "./events.js";
  */
 export type AuthProvider = "static" | "runapps" | "runjobs";
 export interface ClientOptions {
-    /** Static gateway API key (typically prefixed `gw-` / `rj_` / `rrt_`).
-     *  Required unless `apiKeyResolver` or `authProvider: "runapps"` is supplied. */
+    /** A personal API key (`rk_…`) or another static key. Leave it out in an
+     *  app published on RunApps: the browser client then signs the user in. */
     apiKey?: string;
     /**
      * Dynamic API key resolver.  See `AuthProvider` for the typical
@@ -33,9 +33,9 @@ export interface ClientOptions {
      */
     apiKeyResolver?: () => string | Promise<string>;
     /**
-     * Auth strategy — defaults to `"static"`.  Pass `"runapps"` to
-     * activate the built-in browser auth flow against runapps.ai;
-     * baseURL defaults to `https://www.runapps.ai` in that mode.
+     * Auth strategy. Rarely needed: in a browser with no `apiKey` /
+     * `apiKeyResolver` the client uses `"runapps"` (the platform sign-in),
+     * otherwise `"static"` (the key you pass).
      */
     authProvider?: AuthProvider;
     /**
@@ -93,7 +93,7 @@ export interface ClientOptions {
  * ```html
  * <script src="https://cdn.jsdelivr.net/npm/@runappsai/sdk/dist/sdk.umd.js"></script>
  * <script>
- *   const client = new RunApps.Client({ authProvider: "runapps" });
+ *   const client = new RunApps();
  *   const res = await client.chat.create({
  *     model: "gpt-4o-mini",
  *     messages: [{ role: "user", content: "hello" }],

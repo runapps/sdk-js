@@ -27,13 +27,25 @@ test("RunJobs constructs with apiKey and exposes all services", () => {
   assert.ok(client.computer, "computer service");
 });
 
-test("RunJobs throws when apiKey is missing", () => {
-  // Error message mentions all three accepted auth shapes so the user
-  // knows the SDK supports `apiKeyResolver` / `authProvider` too.
-  assert.throws(
-    () => new RunJobs({ apiKey: "" }),
-    /pass either `apiKey`.*`apiKeyResolver`.*`authProvider/,
-  );
+test("outside a browser, a client with no key throws", () => {
+  assert.throws(() => new RunJobs({ apiKey: "" }), /pass `apiKey`/);
+});
+
+test("in a browser, a client with no key uses the platform sign-in", () => {
+  const saved = { window: globalThis.window, location: globalThis.location, history: globalThis.history };
+  globalThis.window = globalThis;
+  globalThis.location = { hash: "", pathname: "/", search: "", origin: "https://demo.runapps.dev", hostname: "demo.runapps.dev" };
+  globalThis.history = { replaceState() {} };
+  try {
+    const client = new RunJobs({ showIdentityBadge: false });
+    assert.ok(client.auth, "browser auth is on without authProvider");
+    const keyed = new RunJobs({ apiKey: "rk_test" });
+    assert.equal(keyed.auth, null, "an explicit key keeps static auth");
+  } finally {
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete globalThis[k]; else globalThis[k] = v;
+    }
+  }
 });
 
 test("APIError carries statusCode and is instanceof Error", () => {
