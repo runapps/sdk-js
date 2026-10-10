@@ -99,7 +99,9 @@ export interface DbChangeEvent {
     store: string;
     keys: IDBValidKey[];
     cleared: boolean;
-    source: "remote";
+    /** "remote": another device's change, just applied locally.
+     *  "tab": another tab of this browser wrote to the shared database. */
+    source: "remote" | "tab";
 }
 export interface SDKEventMap {
     "request:start": RequestStartEvent;

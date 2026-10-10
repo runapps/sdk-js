@@ -285,7 +285,7 @@ new RunApps({ sync: false });                       // off
 new RunApps({ sync: { databases: ["notes"], exclude: ["notes/thumbnails"] } });
 ```
 
-The app keeps using IndexedDB as before, directly or through Dexie, idb, idb-keyval and the like. The first `indexedDB.open` of a database on a new device waits (up to 5 s) for the user's data to arrive, so the first read already sees it. When another device's changes are applied, `db:change` names the store and keys so the app can re-read:
+The app keeps using IndexedDB as before, directly or through Dexie, idb, idb-keyval and the like. The first `indexedDB.open` of a database on a new device waits (up to 5 s) for the user's data to arrive, so the first read already sees it. When another device's changes are applied, or another tab of the same browser writes to the database (IndexedDB itself has no event for that), `db:change` names the store and keys so the app can re-read; `source` is `"remote"` or `"tab"`:
 
 ```ts
 client.events.on("db:change", ({ db, store, keys, cleared }) => refresh(store));

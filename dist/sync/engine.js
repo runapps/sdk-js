@@ -224,6 +224,25 @@ export class SyncEngine {
             }
         }
         this.enqueueLog(logged);
+        // The other tabs share this database but get no event from it:
+        // tell them what changed so their views can re-read.
+        const byStore = new Map();
+        for (const op of ops) {
+            let e = byStore.get(op.store);
+            if (!e)
+                byStore.set(op.store, (e = { keys: [], cleared: false }));
+            if (op.kind === "clear") {
+                e.cleared = true;
+                e.keys = [];
+            }
+            else if (!e.cleared) {
+                e.keys.push(op.key);
+            }
+        }
+        for (const [store, e] of byStore) {
+            const change = { db, store, keys: e.keys, cleared: e.cleared, source: "tab" };
+            this.post({ type: "db:change", change });
+        }
     }
     logChain = Promise.resolve();
     enqueueLog(ops) {
@@ -290,7 +309,10 @@ export class SyncEngine {
                 const d = ev.data;
                 if (!d)
                     return;
-                if (d.type === "sync:state") {
+                if (d.type === "db:change") {
+                    this.deps.events.emit("db:change", d.change);
+                }
+                else if (d.type === "sync:state") {
                     // The leader's state is the origin's state; a follower shows it.
                     if (!this.leader) {
                         this.state = { ...d.state };

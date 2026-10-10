@@ -63,7 +63,10 @@ export interface DbChange {
   /** Primary keys that changed; empty when the whole store was cleared. */
   keys: IDBValidKey[];
   cleared: boolean;
-  source: "remote";
+  /** remote: another device's change, just applied here. tab: another
+   *  tab of this browser wrote to the shared database (IndexedDB has
+   *  no event for that). */
+  source: "remote" | "tab";
 }
 
 /** What the engine needs from the rest of the SDK. */
@@ -325,6 +328,23 @@ export class SyncEngine {
       }
     }
     this.enqueueLog(logged);
+    // The other tabs share this database but get no event from it:
+    // tell them what changed so their views can re-read.
+    const byStore = new Map<string, { keys: IDBValidKey[]; cleared: boolean }>();
+    for (const op of ops) {
+      let e = byStore.get(op.store);
+      if (!e) byStore.set(op.store, (e = { keys: [], cleared: false }));
+      if (op.kind === "clear") {
+        e.cleared = true;
+        e.keys = [];
+      } else if (!e.cleared) {
+        e.keys.push(op.key);
+      }
+    }
+    for (const [store, e] of byStore) {
+      const change: DbChange = { db, store, keys: e.keys, cleared: e.cleared, source: "tab" };
+      this.post({ type: "db:change", change });
+    }
   }
 
   private logChain: Promise<void> = Promise.resolve();
@@ -392,9 +412,16 @@ export class SyncEngine {
     if (typeof BroadcastChannel === "function") {
       this.channel = new BroadcastChannel("__runapps_db_change__");
       this.channel.onmessage = (ev) => {
-        const d = ev.data as (DbChange & { type?: undefined }) | { type: "sync:state"; state: SyncState } | { type: "sync:request" } | undefined;
+        const d = ev.data as
+          | (DbChange & { type?: undefined })
+          | { type: "sync:state"; state: SyncState }
+          | { type: "sync:request" }
+          | { type: "db:change"; change: DbChange }
+          | undefined;
         if (!d) return;
-        if (d.type === "sync:state") {
+        if (d.type === "db:change") {
+          this.deps.events.emit("db:change", d.change);
+        } else if (d.type === "sync:state") {
           // The leader's state is the origin's state; a follower shows it.
           if (!this.leader) {
             this.state = { ...d.state };

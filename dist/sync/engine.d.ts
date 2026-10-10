@@ -36,7 +36,10 @@ export interface DbChange {
     /** Primary keys that changed; empty when the whole store was cleared. */
     keys: IDBValidKey[];
     cleared: boolean;
-    source: "remote";
+    /** remote: another device's change, just applied here. tab: another
+     *  tab of this browser wrote to the shared database (IndexedDB has
+     *  no event for that). */
+    source: "remote" | "tab";
 }
 /** What the engine needs from the rest of the SDK. */
 export interface SyncDeps {
