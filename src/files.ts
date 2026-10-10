@@ -7,7 +7,7 @@
 // endpoints; the underlying token must be a project-bound resource
 // token (rrt_*) issued by the grant flow.
 
-import type { Transport } from "./transport.js";
+import { cleanETag, type Transport } from "./transport.js";
 import type { SDKEvents } from "./events.js";
 import { wrapEvents } from "./event-wrap.js";
 
@@ -153,7 +153,7 @@ export class FilesService {
   ): Promise<FileObject> {
     const headers: Record<string, string> = {};
     if (opts?.ifNoneMatch) headers["If-None-Match"] = "*";
-    if (opts?.ifMatch) headers["If-Match"] = `"${opts.ifMatch.replace(/"/g, "")}"`;
+    if (opts?.ifMatch) headers["If-Match"] = `"${cleanETag(opts.ifMatch)}"`;
     return this.run("files.put", () => this.transport.putBytes<FileObject>(pathToURL(this.base, path), body, {
       contentType: opts?.contentType,
       headers: Object.keys(headers).length ? headers : undefined,

@@ -6,6 +6,7 @@
 // The bundle's RunApps client uses `client.files` to access these
 // endpoints; the underlying token must be a project-bound resource
 // token (rrt_*) issued by the grant flow.
+import { cleanETag } from "./transport.js";
 import { wrapEvents } from "./event-wrap.js";
 function pathToURL(base, p) {
     const trimmed = p.replace(/^\/+/, "");
@@ -60,7 +61,7 @@ export class FilesService {
         if (opts?.ifNoneMatch)
             headers["If-None-Match"] = "*";
         if (opts?.ifMatch)
-            headers["If-Match"] = `"${opts.ifMatch.replace(/"/g, "")}"`;
+            headers["If-Match"] = `"${cleanETag(opts.ifMatch)}"`;
         return this.run("files.put", () => this.transport.putBytes(pathToURL(this.base, path), body, {
             contentType: opts?.contentType,
             headers: Object.keys(headers).length ? headers : undefined,

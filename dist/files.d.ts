@@ -1,4 +1,4 @@
-import type { Transport } from "./transport.js";
+import { type Transport } from "./transport.js";
 import type { SDKEvents } from "./events.js";
 export interface FileObject {
     path: string;

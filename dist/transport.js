@@ -112,12 +112,12 @@ export class Transport {
         const resp = await this.fetchWithAuthRetry(path, async () => {
             const headers = await this.authHeaders();
             if (init?.ifNoneMatch)
-                headers["If-None-Match"] = `"${init.ifNoneMatch.replace(/"/g, "")}"`;
+                headers["If-None-Match"] = `"${cleanETag(init.ifNoneMatch)}"`;
             return { method: "GET", headers, signal: init?.signal };
         });
         const serverTime = parseServerDate(resp.headers.get("date"));
         if (resp.status === 304) {
-            const etag = (resp.headers.get("etag") ?? "").replace(/"/g, "") || init?.ifNoneMatch;
+            const etag = cleanETag(resp.headers.get("etag")) || init?.ifNoneMatch;
             return { data: new Uint8Array(0), contentType: "", etag, notModified: true, serverTime };
         }
         if (!resp.ok) {
@@ -125,7 +125,7 @@ export class Transport {
         }
         const buf = new Uint8Array(await resp.arrayBuffer());
         const contentType = resp.headers.get("content-type") ?? "";
-        const etag = (resp.headers.get("etag") ?? "").replace(/"/g, "") || undefined;
+        const etag = cleanETag(resp.headers.get("etag")) || undefined;
         return { data: buf, contentType, etag, serverTime };
     }
     /** POST a multipart/form-data body. Used by audio.transcribe and image.edit. */
@@ -232,6 +232,14 @@ export class Transport {
     }
 }
 /** The server's clock from a Date header, as ms since epoch. */
+/**
+ * The bare ETag value. A CDN that compresses the response marks the
+ * ETag weak (`W/"…"`); the value is still the object's, and it is what
+ * `If-Match` must carry on the next write.
+ */
+export function cleanETag(raw) {
+    return (raw ?? "").trim().replace(/^W\//i, "").replace(/"/g, "");
+}
 export function parseServerDate(h) {
     if (!h)
         return undefined;

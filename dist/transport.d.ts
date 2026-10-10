@@ -127,5 +127,11 @@ export declare class Transport {
     private parseError;
 }
 /** The server's clock from a Date header, as ms since epoch. */
+/**
+ * The bare ETag value. A CDN that compresses the response marks the
+ * ETag weak (`W/"…"`); the value is still the object's, and it is what
+ * `If-Match` must carry on the next write.
+ */
+export declare function cleanETag(raw: string | null | undefined): string;
 export declare function parseServerDate(h: string | null): number | undefined;
 //# sourceMappingURL=transport.d.ts.map
