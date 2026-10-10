@@ -435,10 +435,6 @@ Helpers: `hasCapabilityTag`, `acceptsModality`, `getOptionsSchema`, `acceptsFiel
 | `<slug>.runapps.dev` | Each app |
 | `files.runapps.ai` | Public file links |
 
-### Upgrading from `@runjobsai/sdk`
-
-The package was renamed. Install `@runappsai/sdk` and change your imports; the API is the same. Users signed in with 0.2.1 or later stay signed in after the upgrade. `authProvider` no longer needs to be set: a browser client without a key signs the user in. `RunJobs` still works as a deprecated alias of `RunApps`, and so does `authProvider: "runjobs"`.
-
 ## License
 
 MIT
