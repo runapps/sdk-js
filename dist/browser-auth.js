@@ -741,7 +741,7 @@ function mountActivityBadge(opts) {
     const el = document.createElement("button");
     el.id = id;
     el.type = "button";
-    el.title = "RunApps activity";
+    el.title = user.name || "RunApps";
     el.setAttribute("aria-label", "RunApps activity status");
     el.style.cssText = [
         "position:fixed",
@@ -749,9 +749,9 @@ function mountActivityBadge(opts) {
         "z-index:2147483647",
         "display:flex",
         "align-items:center",
-        "gap:8px",
-        "padding:6px 12px 6px 6px",
-        "border-radius:999px",
+        "justify-content:center",
+        "padding:5px",
+        "border-radius:50%",
         "font:500 12px/1 -apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif",
         "color:#fff",
         "background:rgba(15,15,20,0.55)",
@@ -760,7 +760,6 @@ function mountActivityBadge(opts) {
         "border:1px solid rgba(255,255,255,0.12)",
         "box-shadow:0 4px 16px rgba(0,0,0,0.15)",
         "user-select:none",
-        "max-width:220px",
         "overflow:visible", // popover spills out the top
         "cursor:pointer",
         "appearance:none",
@@ -847,11 +846,7 @@ function mountActivityBadge(opts) {
     avatarWrap.appendChild(ring);
     avatarWrap.appendChild(avatar);
     avatarWrap.appendChild(led);
-    const name = document.createElement("span");
-    name.textContent = user.name || "Signed in";
-    name.style.cssText = "white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none";
     el.appendChild(avatarWrap);
-    el.appendChild(name);
     // ─── Popover (lazy, append on first open) ──────────────────
     //
     // Open / close has two modes:
@@ -898,7 +893,7 @@ function mountActivityBadge(opts) {
             return;
         }
         if (!popover) {
-            popover = createPopover(dashboardUrl, currentPopoverCss, () => {
+            popover = createPopover(user, dashboardUrl, currentPopoverCss, () => {
                 // Tear down our DOM before the auth flip runs so the popover
                 // doesn't briefly show "signed out" state to a user who's
                 // about to navigate away.  closePopover() also removes the
@@ -1229,7 +1224,7 @@ function updateLED(led, snap) {
             break;
     }
 }
-function createPopover(dashboardUrl, anchorCss, onSignOut) {
+function createPopover(user, dashboardUrl, anchorCss, onSignOut) {
     const pop = document.createElement("div");
     pop.style.cssText = [
         "position:absolute",
@@ -1252,6 +1247,36 @@ function createPopover(dashboardUrl, anchorCss, onSignOut) {
     ].join(";");
     pop.setAttribute("data-runapps-popover", "1");
     pop.addEventListener("click", (e) => e.stopPropagation());
+    // Who is signed in. The badge itself is only the avatar circle, so
+    // the full name lives here, above the activity sections.
+    const header = document.createElement("div");
+    header.style.cssText = [
+        "display:flex;align-items:center;gap:8px",
+        "margin-bottom:10px;padding-bottom:8px",
+        "border-bottom:1px solid rgba(255,255,255,0.08)",
+    ].join(";");
+    const headAvatar = document.createElement("div");
+    headAvatar.textContent = (user.name || "?").charAt(0).toUpperCase();
+    headAvatar.style.cssText = [
+        "width:24px;height:24px;border-radius:50%;flex-shrink:0",
+        "display:flex;align-items:center;justify-content:center",
+        "background:linear-gradient(135deg,#3b82f6,#8b5cf6)",
+        "font-size:11px;font-weight:600;color:#fff",
+    ].join(";");
+    const headName = document.createElement("div");
+    headName.textContent = user.name || "Signed in";
+    headName.title = user.name || "";
+    headName.style.cssText = "font-size:12px;font-weight:500;color:#fff;overflow:hidden;text-overflow:ellipsis;white-space:nowrap";
+    const headSub = document.createElement("div");
+    headSub.textContent = "Signed in with RunApps";
+    headSub.style.cssText = "font-size:10px;color:rgba(255,255,255,0.5)";
+    const headText = document.createElement("div");
+    headText.style.cssText = "min-width:0";
+    headText.appendChild(headName);
+    headText.appendChild(headSub);
+    header.appendChild(headAvatar);
+    header.appendChild(headText);
+    pop.appendChild(header);
     // The popover's content is rebuilt on every redraw to keep DOM
     // diffing simple. ~3 sections × ~6 children = ~20 nodes, no
     // measurable cost at the 6 Hz redraw rate.
