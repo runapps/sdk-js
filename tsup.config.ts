@@ -11,6 +11,8 @@ export default defineConfig({
   entry: { sdk: "src/index.ts" },
   format: ["iife"],
   globalName: "RunApps",
+  // The served file says which release it is (https://www.runapps.ai/sdk/latest.js).
+  banner: { js: `/* @runappsai/sdk ${process.env.npm_package_version ?? require("./package.json").version} */` },
   sourcemap: true,
   minify: true,
   clean: false, // tsc has already produced ESM; don't wipe it

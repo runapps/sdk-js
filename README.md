@@ -22,7 +22,7 @@ npm i @runappsai/sdk
 Or load it with a script tag, which defines the global `RunApps`:
 
 ```html
-<script src="https://cdn.jsdelivr.net/npm/@runappsai/sdk/dist/sdk.umd.js"></script>
+<script src="https://www.runapps.ai/sdk/latest.js"></script>
 <script>
   const client = new RunApps();   // no key: users sign in with RunApps
 </script>

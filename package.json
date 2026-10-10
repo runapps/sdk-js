@@ -46,7 +46,8 @@
     "clean": "rm -rf dist",
     "prepare": "tsc -p tsconfig.json",
     "prepublishOnly": "npm run clean && npm run build",
-    "test": "npm run build && node --test tests/*.test.mjs"
+    "test": "npm run build && node --test tests/*.test.mjs",
+    "release:cdn": "bash scripts/publish-cdn.sh"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
