@@ -80,12 +80,13 @@ Everything in a frontend can be read in the browser. To keep a prompt private, s
 {
   "prompts": {
     "outline": "prompts/outline.md",
-    "critic": "prompts/critic.md"
+    "critic": "prompts/critic.md",
+    "greeting": { "text": "You are the concierge of {{app}}. Be brief." }
   }
 }
 ```
 
-Neither `bundle.json` nor the files it names can be downloaded from your app's address. Files under `.private/prompts/<id>.md` also work without an entry, because dot folders are never served; `"prompts_dir": "ai/prompts"` in `bundle.json` names another folder for that, which is then withheld whole. Call a prompt by id and fill its `{{variables}}`:
+A short prompt can be written straight into `bundle.json` as `{ "text": "…" }` instead of a file. Neither `bundle.json` nor the files it names can be downloaded from your app's address. Files under `.private/prompts/<id>.md` also work without an entry, because dot folders are never served; `"prompts_dir": "ai/prompts"` in `bundle.json` names another folder for that, which is then withheld whole. Call a prompt by id and fill its `{{variables}}`:
 
 ```ts
 await client.chat.create({
