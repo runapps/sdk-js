@@ -66,7 +66,7 @@ export interface ActivitySnapshot {
     active: ActiveCall[];
     recent: CompletedCall[];
     session: SessionStats;
-    /** IndexedDB sync state, when sync is on (see `client.sync`). */
+    /** Sync state, when RunApps Sync is on (see `client.sync`). */
     sync?: {
         state: "off" | "idle" | "syncing" | "offline" | "error";
         pending: number;

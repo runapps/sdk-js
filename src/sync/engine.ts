@@ -1,4 +1,4 @@
-// idb-sync/engine.ts — keeps an app's IndexedDB and the user's cloud copy
+// sync/engine.ts — keeps an app's IndexedDB and the user's cloud copy
 // the same.
 //
 // Storage model (one object per shard, under the user's file space):

@@ -1,4 +1,4 @@
-// idb-sync/hook.ts — observe an app's IndexedDB writes without the app
+// sync/hook.ts — observe an app's IndexedDB writes without the app
 // knowing.
 //
 // There is no browser event for "an object store changed", so the SDK

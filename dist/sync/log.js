@@ -1,4 +1,4 @@
-// idb-sync/log.ts — the SDK's own IndexedDB database.
+// sync/log.ts — the SDK's own IndexedDB database.
 //
 // Holds what the sync engine needs to survive a reload:
 //   ops  — local changes not yet pushed, in commit order. Values are kept

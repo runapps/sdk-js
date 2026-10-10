@@ -21,7 +21,7 @@
 // window.opener relationship for cross-origin popups, so popup-based
 // grant flows silently lose their postMessage replies.
 import { ActivityTracker } from "./activity-tracker.js";
-import { hash32 } from "./idb-sync/codec.js";
+import { hash32 } from "./sync/codec.js";
 const TOKEN_REFRESH_MARGIN_S = 60;
 // Per-project localStorage namespacing.  When two BrowserAuth bundles
 // live on the same origin (most commonly `localhost:5173` during
@@ -233,7 +233,7 @@ export class BrowserAuth {
      * A stable id for whose data is on this browser, or null when nobody
      * is signed in. The user's id when the grant carried one; otherwise
      * derived from the token, which is bound to one user and one app and
-     * never rotates. Used by IndexedDB sync to tell an account switch.
+     * never rotates. Used by Sync to tell an account switch.
      */
     ownerId() {
         if (!this.tokenIsFresh())

@@ -16,9 +16,9 @@ export { RunApps, RunApps as Client, RunApps as RunJobs } from "./client.js";
 export { SDKEvents, newRequestId, } from "./events.js";
 export { ActivityTracker, } from "./activity-tracker.js";
 export { BrowserAuth } from "./browser-auth.js";
-// IndexedDB sync — on by default in apps; exported for status UIs and
+// RunApps Sync — on by default in apps; exported for status UIs and
 // for tests that drive the engine with their own storage.
-export { SyncEngine, FilesRemote, installIndexedDBHook, } from "./idb-sync/index.js";
+export { SyncEngine, FilesRemote, installIndexedDBHook, } from "./sync/index.js";
 export { APIError } from "./errors.js";
 export { userMessage, systemMessage, assistantMessage, toolResultMessage, userMessageParts, textPart, imagePart, videoPart, audioPart, } from "./chat.js";
 export { hasCapabilityTag, acceptsModality, supportsVoiceClone, supportsInstructText, defaultVoice, } from "./models.js";

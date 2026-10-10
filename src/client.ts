@@ -8,7 +8,7 @@ import { ComputerService } from "./computer.js";
 import { FilesService } from "./files.js";
 import { EmbeddingsService } from "./embeddings.js";
 import { BrowserAuth, type BrowserUser } from "./browser-auth.js";
-import { FilesRemote, SyncEngine, type SyncOptions, type SyncState } from "./idb-sync/index.js";
+import { FilesRemote, SyncEngine, type SyncOptions, type SyncState } from "./sync/index.js";
 import { SDKEvents } from "./events.js";
 
 // The platform, not the bare gateway: personal rk_ keys are checked and
@@ -96,15 +96,16 @@ export interface ClientOptions {
   /** Optional fetch override (e.g. node-fetch with custom agent). */
   fetch?: typeof fetch;
   /**
-   * Keep the app's IndexedDB in sync with the signed-in user's cloud
-   * copy. **On by default** in an app on RunApps (browser sign-in mode):
-   * the SDK observes every database the app opens, pushes committed
-   * writes a few seconds later, pulls other devices' changes when the
-   * page is opened, focused or comes back online, and shows the state
-   * on the badge. Pass `false` to turn it off, or options to limit it
-   * to some databases / leave stores out. See `client.sync`.
+   * RunApps Sync: keep the data the app stores in IndexedDB on every
+   * device the user signs in on. **On by default** in an app on RunApps
+   * (browser sign-in mode): the SDK observes every database the app
+   * opens, pushes committed writes a few seconds later, pulls other
+   * devices' changes when the page is opened, focused or comes back
+   * online, and shows the state on the badge. Pass `false` to turn it
+   * off, or options to limit it to some databases / leave stores out.
+   * See `client.sync`.
    */
-  syncIndexedDB?: boolean | SyncOptions;
+  sync?: boolean | SyncOptions;
 }
 
 /**
@@ -148,7 +149,7 @@ export class RunApps {
    */
   readonly auth: BrowserAuth | null = null;
   /**
-   * IndexedDB sync (see `ClientOptions.syncIndexedDB`), or null when it
+   * RunApps Sync (see `ClientOptions.sync`), or null when it
    * is off. `status()` gives the state the badge shows; `now()` pushes
    * and pulls immediately; `client.events.on("db:change", …)` tells the
    * app which store received remote changes so it can re-read.
@@ -250,10 +251,10 @@ export class RunApps {
     this.files = new FilesService(transport, options.project);
     this.embeddings = new EmbeddingsService(transport, this.events);
 
-    // IndexedDB sync: an app on RunApps gets it unless it says no. It
+    // Sync: an app on RunApps gets it unless it says no. It
     // stores under the signed-in user, so only browser sign-in mode has
     // someone to sync for.
-    const wantSync = options.syncIndexedDB ?? this.auth !== null;
+    const wantSync = options.sync ?? this.auth !== null;
     if (wantSync && typeof indexedDB !== "undefined" && this.auth) {
       const auth = this.auth;
       const engine = new SyncEngine(

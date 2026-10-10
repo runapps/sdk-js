@@ -1,4 +1,4 @@
-// idb-sync/codec.ts — JSON encoding for IndexedDB values and keys.
+// sync/codec.ts — JSON encoding for IndexedDB values and keys.
 //
 // IndexedDB stores anything the structured-clone algorithm accepts:
 // Dates, Maps, Sets, binary, Blobs, nested objects, undefined. The sync

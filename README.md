@@ -265,14 +265,14 @@ try {
 
 Paths are at most 900 bytes, and a single file is at most 200 MB.
 
-## IndexedDB sync
+## Sync
 
-An app on RunApps that keeps its data in IndexedDB gets that data on every device the user signs in on, with no code for it. The SDK observes the databases the app opens, pushes committed writes a few seconds later, pulls other devices' changes whenever the page is opened, focused or comes back online, and shows the state on the badge. It is **on by default** in an app on RunApps (browser sign-in mode) and off for personal keys and Node.
+RunApps Sync keeps the data an app stores in IndexedDB on every device the user signs in on, with no code for it. The SDK observes the databases the app opens, pushes committed writes a few seconds later, pulls other devices' changes whenever the page is opened, focused or comes back online, and shows the state on the badge. It is **on by default** in an app on RunApps (browser sign-in mode) and off for personal keys and Node.
 
 ```ts
 const client = new RunApps();                       // sync on: every database the app opens
-new RunApps({ syncIndexedDB: false });              // off
-new RunApps({ syncIndexedDB: { databases: ["notes"], exclude: ["notes/thumbnails"] } });
+new RunApps({ sync: false });                       // off
+new RunApps({ sync: { databases: ["notes"], exclude: ["notes/thumbnails"] } });
 ```
 
 The app keeps using IndexedDB as before, directly or through Dexie, idb, idb-keyval and the like. The first `indexedDB.open` of a database on a new device waits (up to 5 s) for the user's data to arrive, so the first read already sees it. When another device's changes are applied, `db:change` names the store and keys so the app can re-read:
@@ -413,7 +413,7 @@ Every call takes `{ signal }` for cancellation.
 
 Browser sign-in: `client.signIn()`, `client.signOut()`, `client.user`, `client.auth`.
 
-IndexedDB sync: `client.sync.status()`, `now()`, `pause()`, `resume()`; option `syncIndexedDB`; events `sync:state`, `db:change`.
+Sync: `client.sync.status()`, `now()`, `pause()`, `resume()`; option `sync`; events `sync:state`, `db:change`.
 
 Helpers: `hasCapabilityTag`, `acceptsModality`, `getOptionsSchema`, `acceptsField`, `requiresField`, `allowedValuesFor`, `validateRequest`, `supportsVoiceClone`, `supportsInstructText`, `defaultVoice`, `encodeImageUrl`, `decodeMediaUrl`, `ServerTools`, and the message builders `userMessage`, `systemMessage`, `assistantMessage`, `toolResultMessage`, `userMessageParts`, `textPart`, `imagePart`, `videoPart`, `audioPart`.
 

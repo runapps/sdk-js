@@ -111,7 +111,7 @@ export declare class BrowserAuth {
      * A stable id for whose data is on this browser, or null when nobody
      * is signed in. The user's id when the grant carried one; otherwise
      * derived from the token, which is bound to one user and one app and
-     * never rotates. Used by IndexedDB sync to tell an account switch.
+     * never rotates. Used by Sync to tell an account switch.
      */
     ownerId(): string | null;
     /**

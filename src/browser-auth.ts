@@ -23,7 +23,7 @@
 
 import { ActivityTracker, type ActivitySnapshot, type SessionStats } from "./activity-tracker.js";
 import type { SDKEvents } from "./events.js";
-import { hash32 } from "./idb-sync/codec.js";
+import { hash32 } from "./sync/codec.js";
 
 export interface BrowserAuthOptions {
   /**
@@ -315,7 +315,7 @@ export class BrowserAuth {
    * A stable id for whose data is on this browser, or null when nobody
    * is signed in. The user's id when the grant carried one; otherwise
    * derived from the token, which is bound to one user and one app and
-   * never rotates. Used by IndexedDB sync to tell an account switch.
+   * never rotates. Used by Sync to tell an account switch.
    */
   ownerId(): string | null {
     if (!this.tokenIsFresh()) return null;

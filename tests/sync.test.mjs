@@ -1,4 +1,4 @@
-// IndexedDB sync: the hook observes an app's writes, the engine pushes
+// RunApps Sync: the hook observes an app's writes, the engine pushes
 // them to sharded snapshots and pulls other devices' changes back.
 //
 // Runs against fake-indexeddb in Node. "Devices" are separate IDBFactory

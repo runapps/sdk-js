@@ -1,4 +1,4 @@
-// idb-sync/remote.ts — the sync engine's storage, over the files API.
+// sync/remote.ts — the sync engine's storage, over the files API.
 //
 // Shards are plain JSON files in the user's file space for the app, so
 // they share its quota, billing and deletion with everything else the

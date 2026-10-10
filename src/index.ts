@@ -34,7 +34,7 @@ export {
   type ActivitySnapshot,
 } from "./activity-tracker.js";
 export { BrowserAuth, type BrowserAuthOptions, type BrowserUser } from "./browser-auth.js";
-// IndexedDB sync — on by default in apps; exported for status UIs and
+// RunApps Sync — on by default in apps; exported for status UIs and
 // for tests that drive the engine with their own storage.
 export {
   SyncEngine,
@@ -45,7 +45,7 @@ export {
   type DbChange,
   type SyncRemote,
   type SyncDeps,
-} from "./idb-sync/index.js";
+} from "./sync/index.js";
 export type { SyncStateEvent, DbChangeEvent } from "./events.js";
 export { APIError } from "./errors.js";
 export type { Usage } from "./types.js";
