@@ -264,7 +264,22 @@ export class SyncEngine {
 
   /** Push pending changes and pull remote ones now. */
   now(): Promise<void> {
+    if (!this.leader) {
+      // Another tab syncs for this origin: ask it to go now. Its state
+      // comes back over the channel.
+      this.post({ type: "sync:request" });
+      return Promise.resolve();
+    }
     return this.enqueue(() => this.sync());
+  }
+
+  /** Send to the other tabs of this origin. */
+  private post(msg: unknown): void {
+    try {
+      this.channel?.postMessage(msg);
+    } catch {
+      /* channel closed */
+    }
   }
 
   pause(): void {
@@ -317,6 +332,9 @@ export class SyncEngine {
     this.logChain = this.logChain
       .then(() => this.log.append(ops))
       .then(() => this.refreshPending())
+      .then(() => {
+        if (!this.leader) this.post({ type: "sync:request" });
+      })
       .catch((err) => this.fail(err));
     this.schedulePush();
   }
@@ -374,8 +392,24 @@ export class SyncEngine {
     if (typeof BroadcastChannel === "function") {
       this.channel = new BroadcastChannel("__runapps_db_change__");
       this.channel.onmessage = (ev) => {
-        const d = ev.data as DbChange | undefined;
-        if (d && d.source === "remote") this.deps.events.emit("db:change", d);
+        const d = ev.data as (DbChange & { type?: undefined }) | { type: "sync:state"; state: SyncState } | { type: "sync:request" } | undefined;
+        if (!d) return;
+        if (d.type === "sync:state") {
+          // The leader's state is the origin's state; a follower shows it.
+          if (!this.leader) {
+            this.state = { ...d.state };
+            this.deps.events.emit("sync:state", { ...d.state });
+          }
+        } else if (d.type === "sync:request") {
+          // A follower wrote to the log, or wants a sync now: go, and
+          // tell it where things stand either way.
+          if (this.leader) {
+            this.post({ type: "sync:state", state: { ...this.state } });
+            void this.schedule("peer");
+          }
+        } else if (d.source === "remote") {
+          this.deps.events.emit("db:change", d);
+        }
       };
     }
     // One tab syncs at a time; the others feed the shared log and wait
@@ -383,6 +417,9 @@ export class SyncEngine {
     const locks = (navigator as Navigator & { locks?: LockManager }).locks;
     if (locks && typeof locks.request === "function") {
       this.leader = false;
+      // Until the lock is ours, another tab is syncing: ask it where
+      // things stand so this tab does not sit on the initial "off".
+      this.post({ type: "sync:request" });
       void locks
         .request("__runapps_sync__", () => {
           this.leader = true;
@@ -451,7 +488,10 @@ export class SyncEngine {
       next.lastChangeAt !== this.state.lastChangeAt ||
       next.error !== this.state.error;
     this.state = next;
-    if (changed) this.deps.events.emit("sync:state", { ...next });
+    if (changed) {
+      this.deps.events.emit("sync:state", { ...next });
+      if (this.leader) this.post({ type: "sync:state", state: { ...next } });
+    }
   }
 
   private async refreshPending(): Promise<void> {
@@ -778,7 +818,7 @@ export class SyncEngine {
     this.moved = true;
     this.deps.events.emit("db:change", change);
     try {
-      this.channel?.postMessage(change);
+      this.post(change);
     } catch {
       /* keys that cannot be cloned across tabs: the local event already fired */
     }

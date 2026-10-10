@@ -104,6 +104,8 @@ export declare class SyncEngine {
     status(): SyncState;
     /** Push pending changes and pull remote ones now. */
     now(): Promise<void>;
+    /** Send to the other tabs of this origin. */
+    private post;
     pause(): void;
     resume(): void;
     dispose(): void;
