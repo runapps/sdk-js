@@ -83,6 +83,13 @@ export interface PromptRef {
     vars?: Record<string, unknown>;
     template?: string;
 }
+/**
+ * What a prompt field takes: one reference, or a list of references and
+ * plain texts joined in order by a blank line — a private style guide
+ * followed by the user's own words, or a persona and a rules prompt kept
+ * as two files. At most 16 parts.
+ */
+export type PromptInput = PromptRef | Array<PromptRef | string>;
 /** Typed constants for {@link ServerToolName} so you get autocomplete. */
 export declare const ServerTools: {
     readonly WebSearch: "web_search";
@@ -127,7 +134,7 @@ export interface ChatCompletionParams {
      * local dev server, before a bundle exists; the gateway accepts it
      * only from the app's creator.
      */
-    prompt?: PromptRef;
+    prompt?: PromptInput;
     /** Pass-through for provider-specific knobs. */
     [extra: string]: unknown;
 }

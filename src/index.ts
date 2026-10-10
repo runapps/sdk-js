@@ -65,6 +65,7 @@ export type {
   ChatChunkChoice,
   ChatCompletionChunk,
   PromptRef,
+  PromptInput,
 } from "./chat.js";
 export {
   userMessage,

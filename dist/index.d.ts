@@ -13,7 +13,7 @@ export { SyncEngine, FilesRemote, installIndexedDBHook, type SyncOptions, type S
 export type { SyncStateEvent, DbChangeEvent } from "./events.js";
 export { APIError } from "./errors.js";
 export type { Usage } from "./types.js";
-export type { ChatMessage, ContentPart, ChatTool, StreamOptions, ChatCompletionParams, ChatToolCall, ChatChoiceMessage, ChatChoice, ChatCompletion, ChatChunkDelta, ChatChunkChoice, ChatCompletionChunk, PromptRef, } from "./chat.js";
+export type { ChatMessage, ContentPart, ChatTool, StreamOptions, ChatCompletionParams, ChatToolCall, ChatChoiceMessage, ChatChoice, ChatCompletion, ChatChunkDelta, ChatChunkChoice, ChatCompletionChunk, PromptRef, PromptInput, } from "./chat.js";
 export { userMessage, systemMessage, assistantMessage, toolResultMessage, userMessageParts, textPart, imagePart, videoPart, audioPart, } from "./chat.js";
 export type { Model, ModelListOptions, Tag } from "./models.js";
 export { hasCapabilityTag, acceptsModality, supportsVoiceClone, supportsInstructText, defaultVoice, } from "./models.js";

@@ -98,7 +98,14 @@ await client.chat.create({
 
 The platform adds the prompt as the system message and tells the model to keep it confidential. A reply that repeats 30 or more consecutive characters of it is withheld, with `finish_reason: "content_filter"`.
 
-Image, video and speech calls take the same reference in place of their text: the filled-in prompt becomes the `prompt` (or the spoken `input`), and only the id and the variables leave the browser.
+Image, video and speech calls take the same reference in place of their text: the filled-in prompt becomes the `prompt` (or the spoken `input`), and only the id and the variables leave the browser. A prompt field can also be a list of references and plain texts, joined in order by a blank line, so a private style guide can precede the user's own words, or a persona and a rules prompt can stay two files:
+
+```ts
+await client.image.generate("MiniMax Image-01", {
+  prompt: [{ id: "house-style" }, userText, { id: "no-text-in-image" }],
+});
+await client.chat.create({ model, prompt: [{ id: "persona" }, { id: "rules", vars }], messages });
+```
 
 ```ts
 await client.image.generate("MiniMax Image-01", {
