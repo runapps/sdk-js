@@ -85,7 +85,7 @@ Everything in a frontend can be read in the browser. To keep a prompt private, s
 }
 ```
 
-Neither `bundle.json` nor the files it names can be downloaded from your app's address. Files under `.private/prompts/<id>.md` also work without an entry, because dot folders are never served. Call a prompt by id and fill its `{{variables}}`:
+Neither `bundle.json` nor the files it names can be downloaded from your app's address. Files under `.private/prompts/<id>.md` also work without an entry, because dot folders are never served; `"prompts_dir": "ai/prompts"` in `bundle.json` names another folder for that, which is then withheld whole. Call a prompt by id and fill its `{{variables}}`:
 
 ```ts
 await client.chat.create({
