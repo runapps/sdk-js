@@ -71,6 +71,7 @@ export interface ActivitySnapshot {
         state: "off" | "idle" | "syncing" | "offline" | "error";
         pending: number;
         lastSyncedAt?: number;
+        lastChangeAt?: number;
         error?: string;
     };
     /** Highest-priority status colour for the LED dot:

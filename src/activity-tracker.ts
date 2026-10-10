@@ -86,7 +86,7 @@ export interface ActivitySnapshot {
   recent: CompletedCall[];
   session: SessionStats;
   /** Sync state, when RunApps Sync is on (see `client.sync`). */
-  sync?: { state: "off" | "idle" | "syncing" | "offline" | "error"; pending: number; lastSyncedAt?: number; error?: string };
+  sync?: { state: "off" | "idle" | "syncing" | "offline" | "error"; pending: number; lastSyncedAt?: number; lastChangeAt?: number; error?: string };
   /** Highest-priority status colour for the LED dot:
    *    "error"   → recent failure within ERROR_HIGHLIGHT_MS
    *    "active"  → at least one in-flight call

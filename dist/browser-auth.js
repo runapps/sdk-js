@@ -621,6 +621,11 @@ function ensurePulseKeyframes() {
             "  0%   { box-shadow: 0 0 0 0   rgba(59,130,246,0.7); }" +
             "  70%  { box-shadow: 0 0 0 6px rgba(59,130,246,0);   }" +
             "  100% { box-shadow: 0 0 0 0   rgba(59,130,246,0);   }" +
+            "}" +
+            // A sync that moved data: one green ring swells out of the avatar.
+            "@keyframes __runapps_sync_ping__ {" +
+            "  0%   { transform: scale(1);   opacity: 0.9; }" +
+            "  100% { transform: scale(2.1); opacity: 0;   }" +
             "}";
     (document.head ?? document.documentElement).appendChild(style);
 }
@@ -741,7 +746,6 @@ function mountActivityBadge(opts) {
     const el = document.createElement("button");
     el.id = id;
     el.type = "button";
-    el.title = user.name || "RunApps";
     el.setAttribute("aria-label", "RunApps activity status");
     el.style.cssText = [
         "position:fixed",
@@ -1107,6 +1111,7 @@ function mountActivityBadge(opts) {
     // band so the ring jumps as soon as a chunk lands.
     let rafScheduled = false;
     let intervalHandle = null;
+    let seenChangeAt = undefined;
     const reconcile = () => {
         rafScheduled = false;
         if (!tracker) {
@@ -1116,6 +1121,13 @@ function mountActivityBadge(opts) {
             return;
         }
         const snap = tracker.snapshot();
+        // lastChangeAt is only ever set by a sync in this page's lifetime,
+        // so every new value is a change the user just saw happen.
+        const changeAt = snap.sync?.lastChangeAt;
+        if (changeAt && changeAt !== seenChangeAt) {
+            seenChangeAt = changeAt;
+            syncedPing(avatarWrap, led);
+        }
         updateRing(ring, ringArc, RING_CIRC, snap);
         updateLED(led, snap);
         if (popoverOpen && popover)
@@ -1186,6 +1198,38 @@ function updateRing(ring, arc, circ, snap) {
         arc.setAttribute("stroke", "#a78bfa");
     }
 }
+/** Until when the LED shows green after a sync that moved data. */
+let syncFlashUntil = 0;
+/**
+ * A sync just pushed or applied something: a green ring swells out of
+ * the avatar once, and the LED holds green for a moment. Quiet syncs
+ * (nothing to move) show nothing — the badge would otherwise blink
+ * every minute.
+ */
+function syncedPing(avatarWrap, led) {
+    const ping = document.createElement("span");
+    ping.style.cssText = [
+        "position:absolute;inset:0",
+        "border-radius:50%",
+        "border:2px solid #10b981",
+        "pointer-events:none",
+        "animation:__runapps_sync_ping__ 700ms ease-out forwards",
+    ].join(";");
+    ping.addEventListener("animationend", () => ping.remove());
+    avatarWrap.appendChild(ping);
+    setTimeout(() => ping.remove(), 1000); // in case animationend never fires
+    syncFlashUntil = Date.now() + 1200;
+    led.style.background = "#10b981";
+    led.style.boxShadow = "0 0 0 2px rgba(16,185,129,0.35)";
+    led.style.animation = "";
+    setTimeout(() => {
+        // Back to the resting colour once the flash is over.
+        if (Date.now() >= syncFlashUntil) {
+            led.style.background = "rgba(255,255,255,0.2)";
+            led.style.boxShadow = "0 0 0 0 transparent";
+        }
+    }, 1250);
+}
 function updateLED(led, snap) {
     switch (snap.status) {
         case "idle": {
@@ -1193,7 +1237,12 @@ function updateLED(led, snap) {
             // while syncing, amber while changes wait offline or after a
             // failed attempt, grey when everything is on the server.
             const sync = snap.sync;
-            if (sync && sync.state === "syncing") {
+            if (Date.now() < syncFlashUntil) {
+                led.style.background = "#10b981";
+                led.style.boxShadow = "0 0 0 2px rgba(16,185,129,0.35)";
+                led.style.animation = "";
+            }
+            else if (sync && sync.state === "syncing") {
                 led.style.background = "#3b82f6";
                 led.style.boxShadow = "0 0 0 0 rgba(59,130,246,0.7)";
                 led.style.animation = "__runapps_led_pulse__ 1.2s ease-out infinite";

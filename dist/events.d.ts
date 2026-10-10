@@ -84,6 +84,8 @@ export interface SyncStateEvent {
     state: "off" | "idle" | "syncing" | "offline" | "error";
     pending: number;
     lastSyncedAt?: number;
+    /** When a sync last pushed or applied data (not set by a quiet pull). */
+    lastChangeAt?: number;
     error?: string;
 }
 /** Fired after the sync wrote remote changes into a local object store,

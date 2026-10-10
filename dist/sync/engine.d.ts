@@ -25,6 +25,9 @@ export interface SyncState {
     /** Local changes not yet on the server. */
     pending: number;
     lastSyncedAt?: number;
+    /** When a sync last moved data — pushed local writes or applied
+     *  another device's. A quiet pull that found nothing leaves it. */
+    lastChangeAt?: number;
     error?: string;
 }
 export interface DbChange {
@@ -114,6 +117,8 @@ export declare class SyncEngine {
     private schedulePush;
     private schedule;
     private enqueue;
+    /** Set while a sync cycle pushes or applies something. */
+    private moved;
     private setState;
     private refreshPending;
     private fail;

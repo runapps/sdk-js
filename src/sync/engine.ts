@@ -51,6 +51,9 @@ export interface SyncState {
   /** Local changes not yet on the server. */
   pending: number;
   lastSyncedAt?: number;
+  /** When a sync last moved data — pushed local writes or applied
+   *  another device's. A quiet pull that found nothing leaves it. */
+  lastChangeAt?: number;
   error?: string;
 }
 
@@ -435,6 +438,9 @@ export class SyncEngine {
 
   // ── State ────────────────────────────────────────────────────────
 
+  /** Set while a sync cycle pushes or applies something. */
+  private moved = false;
+
   private setState(patch: Partial<SyncState>): void {
     const next = { ...this.state, ...patch };
     if (patch.state && patch.state !== "error") delete next.error;
@@ -442,6 +448,7 @@ export class SyncEngine {
       next.state !== this.state.state ||
       next.pending !== this.state.pending ||
       next.lastSyncedAt !== this.state.lastSyncedAt ||
+      next.lastChangeAt !== this.state.lastChangeAt ||
       next.error !== this.state.error;
     this.state = next;
     if (changed) this.deps.events.emit("sync:state", { ...next });
@@ -516,6 +523,7 @@ export class SyncEngine {
       return;
     }
     this.setState({ state: "syncing" });
+    this.moved = false;
     try {
       await this.loadMeta();
       await this.ensureOwner(userId);
@@ -525,7 +533,8 @@ export class SyncEngine {
       this.backoffMs = 0;
       this.backoffUntil = 0;
       await this.refreshPending();
-      this.setState({ state: "idle", lastSyncedAt: Date.now() });
+      const now = Date.now();
+      this.setState({ state: "idle", lastSyncedAt: now, ...(this.moved ? { lastChangeAt: now } : {}) });
     } catch (err) {
       await this.refreshPending();
       this.fail(err);
@@ -610,6 +619,7 @@ export class SyncEngine {
     }
     await this.log.setMeta(etagUpdates);
     await this.log.remove(done);
+    if (done.length > 0) this.moved = true;
     await this.refreshPending();
   }
 
@@ -765,6 +775,7 @@ export class SyncEngine {
   }
 
   private emitChange(change: DbChange): void {
+    this.moved = true;
     this.deps.events.emit("db:change", change);
     try {
       this.channel?.postMessage(change);
