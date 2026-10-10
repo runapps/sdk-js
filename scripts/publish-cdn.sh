@@ -17,7 +17,7 @@ export AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-auto}"
 version=$(node -p "require('./package.json').version")
 file=dist/sdk.umd.js
 [ -s "$file" ] || { echo "no $file — run npm run build first" >&2; exit 1; }
-grep -q "\"$version\"" "$file" || echo "warning: $file does not mention $version; is the build current?" >&2
+grep -q "@runappsai/sdk $version" "$file" || echo "warning: $file does not mention $version; is the build current?" >&2
 
 put() {
   aws s3 cp "$file" "s3://$R2_BUCKET/sdk/$1" --endpoint-url "$R2_ENDPOINT" \
