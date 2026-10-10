@@ -97,6 +97,16 @@ await client.chat.create({
 
 The platform adds the prompt as the system message and tells the model to keep it confidential. A reply that repeats 30 or more consecutive characters of it is withheld, with `finish_reason: "content_filter"`.
 
+Image, video and speech calls take the same reference in place of their text: the filled-in prompt becomes the `prompt` (or the spoken `input`), and only the id and the variables leave the browser.
+
+```ts
+await client.image.generate("MiniMax Image-01", {
+  prompt: { id: "poster", vars: { subject: "a lighthouse at dusk" } },   // poster.md: "A {{subject}}, in the studio's house style: …"
+});
+await client.video.generate("MiniMax Hailuo 2.3", { prompt: { id: "trailer", vars: { scene } }, duration: 5 });
+await client.audio.speech("MiniMax Speech 2.6 HD", { input: { id: "narration", vars: { name } }, voice: "English_radiant_girl" });
+```
+
 While developing locally, before a bundle exists, send the text inline as `prompt: { template: "…", vars }`. Only the app's creator may do this. Keep it out of production builds, for example behind `import.meta.env.DEV`.
 
 ## Publish it

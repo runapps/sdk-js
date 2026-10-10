@@ -1,4 +1,5 @@
 import type { Transport } from "./transport.js";
+import type { PromptRef } from "./chat.js";
 import type { Usage } from "./types.js";
 import type { SDKEvents } from "./events.js";
 /**
@@ -9,7 +10,9 @@ import type { SDKEvents } from "./events.js";
  * forces off.
  */
 export interface VideoGenerateParams {
-    prompt: string;
+    /** The prompt text, or a private prompt `{ id, vars }` whose
+     *  filled-in text is the prompt (see `PromptRef`). */
+    prompt: string | PromptRef;
     aspect_ratio?: string;
     duration?: number;
     resolution?: string;

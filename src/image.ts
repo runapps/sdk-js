@@ -1,4 +1,5 @@
 import type { Transport } from "./transport.js";
+import type { PromptRef } from "./chat.js";
 import type { Usage } from "./types.js";
 import type { SDKEvents } from "./events.js";
 import { wrapEvents } from "./event-wrap.js";
@@ -13,7 +14,9 @@ import { wrapEvents } from "./event-wrap.js";
  * the three is set, the gateway / upstream applies its own default.
  */
 export interface ImageGenerateParams {
-  prompt: string;
+  /** The prompt text, or a private prompt `{ id, vars }` whose
+   *  filled-in text is the prompt (see `PromptRef`). */
+  prompt: string | PromptRef;
   /** Legacy explicit "WxH" override. Prefer `resolution` +
    *  `aspect_ratio` for new code. */
   size?: string;
@@ -121,7 +124,8 @@ export interface ImageFileInput {
 export interface ImageEditParams {
   image: ImageFileInput;
   mask?: ImageFileInput;
-  prompt: string;
+  /** The prompt text, or a private prompt `{ id, vars }`. */
+  prompt: string | PromptRef;
   size?: string;
   n?: number;
   user?: string;
@@ -298,7 +302,7 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 function buildEditForm(model: string, params: ImageEditParams): FormData {
   const form = new FormData();
   form.set("model", model);
-  form.set("prompt", params.prompt);
+  form.set("prompt", typeof params.prompt === "string" ? params.prompt : JSON.stringify(params.prompt));
   if (params.size) form.set("size", params.size);
   if (params.n !== undefined) form.set("n", String(params.n));
   if (params.user) form.set("user", params.user);

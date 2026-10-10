@@ -104,7 +104,7 @@ function sleep(ms, signal) {
 function buildEditForm(model, params) {
     const form = new FormData();
     form.set("model", model);
-    form.set("prompt", params.prompt);
+    form.set("prompt", typeof params.prompt === "string" ? params.prompt : JSON.stringify(params.prompt));
     if (params.size)
         form.set("size", params.size);
     if (params.n !== undefined)

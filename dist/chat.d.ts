@@ -68,6 +68,21 @@ export interface StreamOptions {
  * read result → fetch → answer" can't be expressed as a single call.
  */
 export type ServerToolName = "web_search" | "web_fetch" | "twitter_search";
+/**
+ * One of the app's private prompts, kept out of the browser. The
+ * gateway reads `<id>.md` from the app's bundle (`bundle.json` or
+ * `.private/prompts/`), fills `{{var}}` placeholders from `vars`, and
+ * uses the result: as the system message for chat, or as the whole
+ * text for image, video and speech calls, where it takes the place of
+ * `prompt` / `input`. `template` sends the text inline instead — for a
+ * creator's local dev server, before a bundle exists; the gateway
+ * accepts it only from the app's creator.
+ */
+export interface PromptRef {
+    id?: string;
+    vars?: Record<string, unknown>;
+    template?: string;
+}
 /** Typed constants for {@link ServerToolName} so you get autocomplete. */
 export declare const ServerTools: {
     readonly WebSearch: "web_search";
@@ -112,11 +127,7 @@ export interface ChatCompletionParams {
      * local dev server, before a bundle exists; the gateway accepts it
      * only from the app's creator.
      */
-    prompt?: {
-        id?: string;
-        vars?: Record<string, unknown>;
-        template?: string;
-    };
+    prompt?: PromptRef;
     /** Pass-through for provider-specific knobs. */
     [extra: string]: unknown;
 }

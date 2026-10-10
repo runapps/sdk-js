@@ -1,4 +1,5 @@
 import type { Transport } from "./transport.js";
+import type { PromptRef } from "./chat.js";
 import type { Usage } from "./types.js";
 import type { SDKEvents } from "./events.js";
 /**
@@ -11,7 +12,9 @@ import type { SDKEvents } from "./events.js";
  * the three is set, the gateway / upstream applies its own default.
  */
 export interface ImageGenerateParams {
-    prompt: string;
+    /** The prompt text, or a private prompt `{ id, vars }` whose
+     *  filled-in text is the prompt (see `PromptRef`). */
+    prompt: string | PromptRef;
     /** Legacy explicit "WxH" override. Prefer `resolution` +
      *  `aspect_ratio` for new code. */
     size?: string;
@@ -113,7 +116,8 @@ export interface ImageFileInput {
 export interface ImageEditParams {
     image: ImageFileInput;
     mask?: ImageFileInput;
-    prompt: string;
+    /** The prompt text, or a private prompt `{ id, vars }`. */
+    prompt: string | PromptRef;
     size?: string;
     n?: number;
     user?: string;

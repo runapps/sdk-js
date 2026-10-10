@@ -1,8 +1,11 @@
 import type { Transport } from "./transport.js";
+import type { PromptRef } from "./chat.js";
 import type { Usage } from "./types.js";
 import type { SDKEvents } from "./events.js";
 export interface SpeechParams {
-    input: string;
+    /** The text to speak, or a private prompt `{ id, vars }` whose
+     *  filled-in text is spoken (see `PromptRef`). */
+    input: string | PromptRef;
     /** Named voice id (`alloy`, `nova`, …; provider-dependent). Omit
      *  when supplying `reference_audio_url` for zero-shot voice
      *  cloning — the cloned timbre overrides any named voice. */
