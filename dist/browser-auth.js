@@ -839,12 +839,15 @@ function mountActivityBadge(opts) {
     const led = document.createElement("span");
     led.style.cssText = [
         "position:absolute",
-        "bottom:-2px;right:-2px",
-        "width:8px;height:8px;border-radius:50%",
+        "bottom:-1px;right:-1px",
+        "width:7px;height:7px;border-radius:50%",
         "background:rgba(255,255,255,0.2)",
-        "border:2px solid rgba(15,15,20,1)",
+        "border:1.5px solid rgba(15,15,20,1)",
         "box-shadow:0 0 0 0 transparent",
-        "transition:background-color 150ms ease-out, box-shadow 200ms ease-out",
+        // Hidden at rest: it only appears while something is happening
+        // (syncing, offline, an error, the green flash after a sync).
+        "opacity:0",
+        "transition:background-color 150ms ease-out, box-shadow 200ms ease-out, opacity 200ms ease-out",
         "pointer-events:none",
     ].join(";");
     avatarWrap.appendChild(ring);
@@ -1118,6 +1121,7 @@ function mountActivityBadge(opts) {
             // No event bus → static badge. Hide ring + LED.
             ring.style.opacity = "0";
             led.style.background = "rgba(255,255,255,0.2)";
+            led.style.opacity = "0";
             return;
         }
         const snap = tracker.snapshot();
@@ -1219,6 +1223,7 @@ function syncedPing(avatarWrap, led) {
     avatarWrap.appendChild(ping);
     setTimeout(() => ping.remove(), 1000); // in case animationend never fires
     syncFlashUntil = Date.now() + 1200;
+    led.style.opacity = "1";
     led.style.background = "#10b981";
     led.style.boxShadow = "0 0 0 2px rgba(16,185,129,0.35)";
     led.style.animation = "";
@@ -1226,11 +1231,13 @@ function syncedPing(avatarWrap, led) {
         // Back to the resting colour once the flash is over.
         if (Date.now() >= syncFlashUntil) {
             led.style.background = "rgba(255,255,255,0.2)";
+            led.style.opacity = "0";
             led.style.boxShadow = "0 0 0 0 transparent";
         }
     }, 1250);
 }
 function updateLED(led, snap) {
+    led.style.opacity = "1"; // the resting branches below hide it again
     switch (snap.status) {
         case "idle": {
             // Nothing in flight: the LED shows the sync instead — blue pulse
@@ -1254,6 +1261,7 @@ function updateLED(led, snap) {
             }
             else {
                 led.style.background = "rgba(255,255,255,0.2)";
+                led.style.opacity = "0";
                 led.style.boxShadow = "0 0 0 0 transparent";
                 led.style.animation = "";
             }

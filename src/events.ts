@@ -32,7 +32,10 @@ export type SDKCapability =
   | "text_to_speech"
   | "speech_to_text"
   | "video_generation"
-  | "computer_use";
+  | "computer_use"
+  /** A file-space call (`client.files`). Shown on the badge while in
+   *  flight and on failure, but not listed or charged per call. */
+  | "files";
 
 /** Fired the moment a request hits the wire. */
 export interface RequestStartEvent {

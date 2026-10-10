@@ -1,4 +1,5 @@
 import type { Transport } from "./transport.js";
+import type { SDKEvents } from "./events.js";
 export interface FileObject {
     path: string;
     size: number;
@@ -95,6 +96,10 @@ export interface BatchResult {
 }
 export declare class FilesService {
     private readonly transport;
+    /** When given, every call emits request:start / end / error so the
+     *  badge can show it in flight; the sync engine's own file traffic
+     *  uses a service without one. */
+    private readonly events?;
     /**
      * URL prefix for every file call.
      *
@@ -113,7 +118,13 @@ export declare class FilesService {
      * measure, not a permission one.
      */
     private readonly base;
-    constructor(transport: Transport, project?: string);
+    constructor(transport: Transport, project?: string, 
+    /** When given, every call emits request:start / end / error so the
+     *  badge can show it in flight; the sync engine's own file traffic
+     *  uses a service without one. */
+    events?: SDKEvents | undefined);
+    /** Run one file call, with badge events when the service has a bus. */
+    private run;
     /**
      * Upload `body` to `path`.  Returns the resulting FileObject — its
      * `url` is the stable public address for that path.
@@ -143,6 +154,7 @@ export declare class FilesService {
         signal?: AbortSignal;
         ifNoneMatch?: string;
     }): Promise<FileRead>;
+    private readRaw;
     /**
      * Read a JSON file and its version in one call. A missing file is
      * `{ value: undefined, etag: undefined }`, so a first save can pass
@@ -217,5 +229,6 @@ export declare class FilesService {
     batch(ops: BatchOp[], init?: {
         signal?: AbortSignal;
     }): Promise<BatchResult[]>;
+    private batchRaw;
 }
 //# sourceMappingURL=files.d.ts.map

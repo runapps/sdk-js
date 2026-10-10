@@ -8,6 +8,8 @@
 // token (rrt_*) issued by the grant flow.
 
 import type { Transport } from "./transport.js";
+import type { SDKEvents } from "./events.js";
+import { wrapEvents } from "./event-wrap.js";
 
 export interface FileObject {
   path: string;
@@ -121,10 +123,19 @@ export class FilesService {
   constructor(
     private readonly transport: Transport,
     project?: string,
+    /** When given, every call emits request:start / end / error so the
+     *  badge can show it in flight; the sync engine's own file traffic
+     *  uses a service without one. */
+    private readonly events?: SDKEvents,
   ) {
     this.base = project
       ? "/v1/p/" + encodeURIComponent(project) + "/files"
       : "/v1/files";
+  }
+
+  /** Run one file call, with badge events when the service has a bus. */
+  private run<T>(op: string, fn: () => Promise<T>): Promise<T> {
+    return this.events ? wrapEvents(this.events, { model: op, capability: "files" }, fn) : fn();
   }
 
   /**
@@ -143,11 +154,11 @@ export class FilesService {
     const headers: Record<string, string> = {};
     if (opts?.ifNoneMatch) headers["If-None-Match"] = "*";
     if (opts?.ifMatch) headers["If-Match"] = `"${opts.ifMatch.replace(/"/g, "")}"`;
-    return this.transport.putBytes<FileObject>(pathToURL(this.base, path), body, {
+    return this.run("files.put", () => this.transport.putBytes<FileObject>(pathToURL(this.base, path), body, {
       contentType: opts?.contentType,
       headers: Object.keys(headers).length ? headers : undefined,
       signal: opts?.signal,
-    });
+    }));
   }
 
   /** Convenience: upload string content with sensible content-type. */
@@ -178,6 +189,10 @@ export class FilesService {
    * still the version that was read.
    */
   async read(path: string, init?: { signal?: AbortSignal; ifNoneMatch?: string }): Promise<FileRead> {
+    return this.run("files.read", () => this.readRaw(path, init));
+  }
+
+  private async readRaw(path: string, init?: { signal?: AbortSignal; ifNoneMatch?: string }): Promise<FileRead> {
     const { data, contentType, etag, notModified } = await this.transport.getRaw(pathToURL(this.base, path), init);
     return {
       blob: new Blob([new Uint8Array(data)], { type: contentType || "application/octet-stream" }),
@@ -212,7 +227,7 @@ export class FilesService {
 
   /** Stat: HEAD-only object metadata. */
   async stat(path: string, init?: { signal?: AbortSignal }): Promise<FileObject> {
-    const { status, headers } = await this.transport.head(pathToURL(this.base, path), init);
+    const { status, headers } = await this.run("files.stat", () => this.transport.head(pathToURL(this.base, path), init));
     if (status === 404) {
       throw Object.assign(new Error("not found"), { status: 404 });
     }
@@ -231,13 +246,13 @@ export class FilesService {
 
   /** Returns true iff the path resolves to an existing object. */
   async exists(path: string, init?: { signal?: AbortSignal }): Promise<boolean> {
-    const { status } = await this.transport.head(pathToURL(this.base, path), init);
+    const { status } = await this.run("files.exists", () => this.transport.head(pathToURL(this.base, path), init));
     return status >= 200 && status < 400;
   }
 
   /** Delete the object at `path`.  Idempotent. */
   async del(path: string, init?: { signal?: AbortSignal }): Promise<void> {
-    await this.transport.deletePath<{ ok: boolean }>(pathToURL(this.base, path), init);
+    await this.run("files.del", () => this.transport.deletePath<{ ok: boolean }>(pathToURL(this.base, path), init));
   }
 
   /** List objects.  Pass an empty / omitted prefix for the root. */
@@ -248,10 +263,10 @@ export class FilesService {
     if (opts?.limit) params.set("limit", String(opts.limit));
     if (opts?.glob) params.set("glob", opts.glob);
     const qs = params.toString();
-    return this.transport.getJSON<FileListResult>(
+    return this.run("files.list", () => this.transport.getJSON<FileListResult>(
       this.base + (qs ? "?" + qs : ""),
       opts?.signal ? { signal: opts.signal } : undefined,
-    );
+    ));
   }
 
   /**
@@ -268,21 +283,21 @@ export class FilesService {
     opts: { prefix?: string; glob?: string },
     init?: { signal?: AbortSignal },
   ): Promise<{ deleted: number }> {
-    return this.transport.postJSON<{ deleted: number }>(
+    return this.run("files.deleteMany", () => this.transport.postJSON<{ deleted: number }>(
       this.base + "/delete",
       { prefix: opts.prefix ?? "", glob: opts.glob ?? "" },
       init,
-    );
+    ));
   }
 
   /** Atomic rename (copy + delete server-side). */
   async move(from: string, to: string, init?: { signal?: AbortSignal }): Promise<FileObject> {
-    return this.transport.postJSON<FileObject>(this.base + "/move", { from, to }, init);
+    return this.run("files.move", () => this.transport.postJSON<FileObject>(this.base + "/move", { from, to }, init));
   }
 
   /** Server-side copy. */
   async copy(from: string, to: string, init?: { signal?: AbortSignal }): Promise<FileObject> {
-    return this.transport.postJSON<FileObject>(this.base + "/copy", { from, to }, init);
+    return this.run("files.copy", () => this.transport.postJSON<FileObject>(this.base + "/copy", { from, to }, init));
   }
 
   /**
@@ -295,7 +310,7 @@ export class FilesService {
     srcURL: string,
     opts?: PutFromURLOptions,
   ): Promise<FileObject> {
-    return this.transport.postJSON<FileObject>(
+    return this.run("files.putFromURL", () => this.transport.postJSON<FileObject>(
       this.base + "/put-url",
       {
         path,
@@ -305,7 +320,7 @@ export class FilesService {
         if_match: opts?.ifMatch,
       },
       opts?.signal ? { signal: opts.signal } : undefined,
-    );
+    ));
   }
 
   /**
@@ -325,6 +340,10 @@ export class FilesService {
     init?: { signal?: AbortSignal },
   ): Promise<BatchResult[]> {
     if (ops.length === 0) return [];
+    return this.run("files.batch", () => this.batchRaw(ops, init));
+  }
+
+  private async batchRaw(ops: BatchOp[], init?: { signal?: AbortSignal }): Promise<BatchResult[]> {
     const chunkSize = 30;
     if (ops.length <= chunkSize) {
       const resp = await this.transport.postJSON<{ results: BatchResult[] }>(

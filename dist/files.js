@@ -6,12 +6,14 @@
 // The bundle's RunApps client uses `client.files` to access these
 // endpoints; the underlying token must be a project-bound resource
 // token (rrt_*) issued by the grant flow.
+import { wrapEvents } from "./event-wrap.js";
 function pathToURL(base, p) {
     const trimmed = p.replace(/^\/+/, "");
     return base + "/" + trimmed.split("/").map(encodeURIComponent).join("/");
 }
 export class FilesService {
     transport;
+    events;
     /**
      * URL prefix for every file call.
      *
@@ -30,11 +32,20 @@ export class FilesService {
      * measure, not a permission one.
      */
     base;
-    constructor(transport, project) {
+    constructor(transport, project, 
+    /** When given, every call emits request:start / end / error so the
+     *  badge can show it in flight; the sync engine's own file traffic
+     *  uses a service without one. */
+    events) {
         this.transport = transport;
+        this.events = events;
         this.base = project
             ? "/v1/p/" + encodeURIComponent(project) + "/files"
             : "/v1/files";
+    }
+    /** Run one file call, with badge events when the service has a bus. */
+    run(op, fn) {
+        return this.events ? wrapEvents(this.events, { model: op, capability: "files" }, fn) : fn();
     }
     /**
      * Upload `body` to `path`.  Returns the resulting FileObject — its
@@ -50,11 +61,11 @@ export class FilesService {
             headers["If-None-Match"] = "*";
         if (opts?.ifMatch)
             headers["If-Match"] = `"${opts.ifMatch.replace(/"/g, "")}"`;
-        return this.transport.putBytes(pathToURL(this.base, path), body, {
+        return this.run("files.put", () => this.transport.putBytes(pathToURL(this.base, path), body, {
             contentType: opts?.contentType,
             headers: Object.keys(headers).length ? headers : undefined,
             signal: opts?.signal,
-        });
+        }));
     }
     /** Convenience: upload string content with sensible content-type. */
     async putString(path, content, opts) {
@@ -78,6 +89,9 @@ export class FilesService {
      * still the version that was read.
      */
     async read(path, init) {
+        return this.run("files.read", () => this.readRaw(path, init));
+    }
+    async readRaw(path, init) {
         const { data, contentType, etag, notModified } = await this.transport.getRaw(pathToURL(this.base, path), init);
         return {
             blob: new Blob([new Uint8Array(data)], { type: contentType || "application/octet-stream" }),
@@ -109,7 +123,7 @@ export class FilesService {
     }
     /** Stat: HEAD-only object metadata. */
     async stat(path, init) {
-        const { status, headers } = await this.transport.head(pathToURL(this.base, path), init);
+        const { status, headers } = await this.run("files.stat", () => this.transport.head(pathToURL(this.base, path), init));
         if (status === 404) {
             throw Object.assign(new Error("not found"), { status: 404 });
         }
@@ -127,12 +141,12 @@ export class FilesService {
     }
     /** Returns true iff the path resolves to an existing object. */
     async exists(path, init) {
-        const { status } = await this.transport.head(pathToURL(this.base, path), init);
+        const { status } = await this.run("files.exists", () => this.transport.head(pathToURL(this.base, path), init));
         return status >= 200 && status < 400;
     }
     /** Delete the object at `path`.  Idempotent. */
     async del(path, init) {
-        await this.transport.deletePath(pathToURL(this.base, path), init);
+        await this.run("files.del", () => this.transport.deletePath(pathToURL(this.base, path), init));
     }
     /** List objects.  Pass an empty / omitted prefix for the root. */
     async list(opts) {
@@ -146,7 +160,7 @@ export class FilesService {
         if (opts?.glob)
             params.set("glob", opts.glob);
         const qs = params.toString();
-        return this.transport.getJSON(this.base + (qs ? "?" + qs : ""), opts?.signal ? { signal: opts.signal } : undefined);
+        return this.run("files.list", () => this.transport.getJSON(this.base + (qs ? "?" + qs : ""), opts?.signal ? { signal: opts.signal } : undefined));
     }
     /**
      * Bulk delete: removes every object whose path starts with `prefix`
@@ -159,15 +173,15 @@ export class FilesService {
      *   client.files.deleteMany({ prefix: "logs/", glob: "*.bak" })
      */
     async deleteMany(opts, init) {
-        return this.transport.postJSON(this.base + "/delete", { prefix: opts.prefix ?? "", glob: opts.glob ?? "" }, init);
+        return this.run("files.deleteMany", () => this.transport.postJSON(this.base + "/delete", { prefix: opts.prefix ?? "", glob: opts.glob ?? "" }, init));
     }
     /** Atomic rename (copy + delete server-side). */
     async move(from, to, init) {
-        return this.transport.postJSON(this.base + "/move", { from, to }, init);
+        return this.run("files.move", () => this.transport.postJSON(this.base + "/move", { from, to }, init));
     }
     /** Server-side copy. */
     async copy(from, to, init) {
-        return this.transport.postJSON(this.base + "/copy", { from, to }, init);
+        return this.run("files.copy", () => this.transport.postJSON(this.base + "/copy", { from, to }, init));
     }
     /**
      * Ask the gateway to fetch `srcURL` and store the body at `path`.
@@ -175,13 +189,13 @@ export class FilesService {
      * must be a public http(s) URL (private/loopback hosts rejected).
      */
     async putFromURL(path, srcURL, opts) {
-        return this.transport.postJSON(this.base + "/put-url", {
+        return this.run("files.putFromURL", () => this.transport.postJSON(this.base + "/put-url", {
             path,
             src_url: srcURL,
             content_type: opts?.contentType,
             if_none_match: opts?.ifNoneMatch,
             if_match: opts?.ifMatch,
-        }, opts?.signal ? { signal: opts.signal } : undefined);
+        }, opts?.signal ? { signal: opts.signal } : undefined));
     }
     /**
      * Pipeline several file ops in one round trip.  Operations execute
@@ -198,6 +212,9 @@ export class FilesService {
     async batch(ops, init) {
         if (ops.length === 0)
             return [];
+        return this.run("files.batch", () => this.batchRaw(ops, init));
+    }
+    async batchRaw(ops, init) {
         const chunkSize = 30;
         if (ops.length <= chunkSize) {
             const resp = await this.transport.postJSON(this.base + "/batch", { ops }, init);

@@ -137,6 +137,9 @@ export class ActivityTracker {
     onEnd(e) {
         const call = this.active.get(e.id);
         this.active.delete(e.id);
+        // File calls only show while in flight: nothing to list or add up.
+        if (e.capability === "files")
+            return;
         this.pushRecent({
             id: e.id,
             model: e.model,
@@ -155,6 +158,13 @@ export class ActivityTracker {
     onError(e) {
         const call = this.active.get(e.id);
         this.active.delete(e.id);
+        if (e.capability === "files") {
+            // Not listed; the LED goes red for a moment unless it was only a
+            // missing file, which apps probe for routinely.
+            if (e.statusCode !== 404)
+                this.lastErrorAt = Date.now();
+            return;
+        }
         this.pushRecent({
             id: e.id,
             model: e.model,

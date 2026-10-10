@@ -145,7 +145,7 @@ export class RunApps {
         // `project` also scopes the file URLs (/v1/p/<project>/files/...),
         // so two apps never issue byte-identical file requests.  Omitted →
         // legacy unscoped /v1/files/... paths.
-        this.files = new FilesService(transport, options.project);
+        this.files = new FilesService(transport, options.project, this.events);
         this.embeddings = new EmbeddingsService(transport, this.events);
         // Sync: an app on RunApps gets it unless it says no. It
         // stores under the signed-in user, so only browser sign-in mode has
@@ -154,7 +154,9 @@ export class RunApps {
         if (wantSync && typeof indexedDB !== "undefined" && this.auth) {
             const auth = this.auth;
             const engine = new SyncEngine({
-                remote: new FilesRemote(this.files),
+                // Its own file service, without the event bus: sync traffic
+                // must not spin the badge every minute.
+                remote: new FilesRemote(new FilesService(transport, options.project)),
                 events: this.events,
                 userId: () => auth.ownerId(),
                 onAuthChange: (cb) => auth.onTokenChange(() => cb()),
