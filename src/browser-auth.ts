@@ -906,6 +906,12 @@ function mountActivityBadge(opts: MountOpts): HTMLButtonElement {
     "border:1px solid rgba(255,255,255,0.12)",
     "box-shadow:0 4px 16px rgba(0,0,0,0.15)",
     "user-select:none",
+    "-webkit-user-select:none",
+    // Touch: without this the browser claims the first finger move as a
+    // page scroll and fires pointercancel, so the badge could not be
+    // dragged on phones. No callout either: a long press is a drag.
+    "touch-action:none",
+    "-webkit-touch-callout:none",
     "overflow:visible", // popover spills out the top
     "cursor:pointer",
     "appearance:none",
@@ -1188,7 +1194,11 @@ function mountActivityBadge(opts: MountOpts): HTMLButtonElement {
       // so further moves arrive even when the pointer escapes the
       // badge bounds (fast drags leave the small pill quickly).
       isDragging = true;
-      el.setPointerCapture(e.pointerId);
+      try {
+        el.setPointerCapture(e.pointerId);
+      } catch {
+        /* no active pointer of that id (synthetic events, odd WebViews): drag still works while the finger stays on the badge */
+      }
       el.style.cursor = "grabbing";
       // Pre-emptively close any open popover — keeping it pinned to a
       // moving badge looks janky and a drag is clearly a different
@@ -1211,7 +1221,11 @@ function mountActivityBadge(opts: MountOpts): HTMLButtonElement {
     if (!isDragging) return;
     isDragging = false;
     el.style.cursor = "pointer";
-    if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId);
+    try {
+      if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId);
+    } catch {
+      /* same */
+    }
     // Persist final position. Re-read the rect so what we store is
     // exactly what's on screen — clampToViewport may have shaved
     // the trailing few pixels.
