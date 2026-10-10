@@ -7,6 +7,7 @@ import { ComputerService } from "./computer.js";
 import { FilesService } from "./files.js";
 import { EmbeddingsService } from "./embeddings.js";
 import { BrowserAuth, type BrowserUser } from "./browser-auth.js";
+import { type SyncOptions, type SyncState } from "./idb-sync/index.js";
 import { SDKEvents } from "./events.js";
 /**
  * Auth strategy.
@@ -84,6 +85,16 @@ export interface ClientOptions {
     baseURL?: string;
     /** Optional fetch override (e.g. node-fetch with custom agent). */
     fetch?: typeof fetch;
+    /**
+     * Keep the app's IndexedDB in sync with the signed-in user's cloud
+     * copy. **On by default** in an app on RunApps (browser sign-in mode):
+     * the SDK observes every database the app opens, pushes committed
+     * writes a few seconds later, pulls other devices' changes when the
+     * page is opened, focused or comes back online, and shows the state
+     * on the badge. Pass `false` to turn it off, or options to limit it
+     * to some databases / leave stores out. See `client.sync`.
+     */
+    syncIndexedDB?: boolean | SyncOptions;
 }
 /**
  * Top-level RunApps SDK client.  Construct once, share across services.
@@ -124,6 +135,19 @@ export declare class RunApps {
      * subscription, etc.).
      */
     readonly auth: BrowserAuth | null;
+    /**
+     * IndexedDB sync (see `ClientOptions.syncIndexedDB`), or null when it
+     * is off. `status()` gives the state the badge shows; `now()` pushes
+     * and pulls immediately; `client.events.on("db:change", …)` tells the
+     * app which store received remote changes so it can re-read.
+     */
+    readonly sync: {
+        status(): SyncState;
+        now(): Promise<void>;
+        pause(): void;
+        resume(): void;
+        dispose(): void;
+    } | null;
     /**
      * Runtime event bus for SDK-call telemetry. Every LLM-ish service
      * (chat / embeddings / image / audio / video / computer) fires

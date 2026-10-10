@@ -177,12 +177,13 @@ export class FilesService {
    * `put(path, body, { ifMatch: etag })` writes only if the file is
    * still the version that was read.
    */
-  async read(path: string, init?: { signal?: AbortSignal }): Promise<FileRead> {
-    const { data, contentType, etag } = await this.transport.getRaw(pathToURL(this.base, path), init);
+  async read(path: string, init?: { signal?: AbortSignal; ifNoneMatch?: string }): Promise<FileRead> {
+    const { data, contentType, etag, notModified } = await this.transport.getRaw(pathToURL(this.base, path), init);
     return {
       blob: new Blob([new Uint8Array(data)], { type: contentType || "application/octet-stream" }),
       contentType,
       etag,
+      ...(notModified ? { notModified: true } : {}),
     };
   }
 
@@ -193,9 +194,9 @@ export class FilesService {
    */
   async readJSON<T = unknown>(
     path: string,
-    init?: { signal?: AbortSignal },
-  ): Promise<{ value: T | undefined; etag?: string }> {
-    let r: FileRead;
+    init?: { signal?: AbortSignal; ifNoneMatch?: string },
+  ): Promise<{ value: T | undefined; etag?: string; notModified?: boolean }> {
+    let r: FileRead & { notModified?: boolean };
     try {
       r = await this.read(path, init);
     } catch (e) {
@@ -205,6 +206,7 @@ export class FilesService {
       }
       throw e;
     }
+    if (r.notModified) return { value: undefined, etag: r.etag, notModified: true };
     return { value: JSON.parse(await r.blob.text()) as T, etag: r.etag };
   }
 

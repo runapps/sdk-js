@@ -141,6 +141,7 @@ export declare class FilesService {
      */
     read(path: string, init?: {
         signal?: AbortSignal;
+        ifNoneMatch?: string;
     }): Promise<FileRead>;
     /**
      * Read a JSON file and its version in one call. A missing file is
@@ -149,9 +150,11 @@ export declare class FilesService {
      */
     readJSON<T = unknown>(path: string, init?: {
         signal?: AbortSignal;
+        ifNoneMatch?: string;
     }): Promise<{
         value: T | undefined;
         etag?: string;
+        notModified?: boolean;
     }>;
     /** Stat: HEAD-only object metadata. */
     stat(path: string, init?: {

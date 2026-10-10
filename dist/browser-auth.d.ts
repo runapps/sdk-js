@@ -108,6 +108,13 @@ export declare class BrowserAuth {
      */
     hasFreshToken(): boolean;
     /**
+     * A stable id for whose data is on this browser, or null when nobody
+     * is signed in. The user's id when the grant carried one; otherwise
+     * derived from the token, which is bound to one user and one app and
+     * never rotates. Used by IndexedDB sync to tell an account switch.
+     */
+    ownerId(): string | null;
+    /**
      * Clear the cached token / user / badge and the persisted copy in
      * localStorage.  Next gateway call will trigger a redirect to the
      * grant page — i.e. the standard sign-in flow.  Wire this to a

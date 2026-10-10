@@ -46,6 +46,7 @@ export class ActivityTracker {
      *  ring/LED stayed idle until the user opened the popover —
      *  events landed in the tracker but nobody told the DOM. */
     changeListeners = new Set();
+    sync = undefined;
     /**
      * Subscribe the tracker to a bus. Returns a single disposer that
      * unsubscribes all four handlers — callers (BrowserAuth in our
@@ -57,6 +58,7 @@ export class ActivityTracker {
             events.on("request:streamDelta", (e) => { this.onDelta(e); this.notify(); }),
             events.on("request:end", (e) => { this.onEnd(e); this.notify(); }),
             events.on("request:error", (e) => { this.onError(e); this.notify(); }),
+            events.on("sync:state", (e) => { this.sync = { ...e }; this.notify(); }),
         ];
         return () => {
             for (const o of offs)
@@ -93,6 +95,7 @@ export class ActivityTracker {
             active: Array.from(this.active.values()),
             recent: this.recent.slice(),
             session: { ...this.session },
+            ...(this.sync ? { sync: { ...this.sync } } : {}),
             status: now - this.lastErrorAt < ERROR_HIGHLIGHT_MS
                 ? "error"
                 : this.active.size > 0

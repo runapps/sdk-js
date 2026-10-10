@@ -9,6 +9,8 @@ export { RunApps, RunApps as Client, RunApps as RunJobs, type ClientOptions, typ
 export { SDKEvents, newRequestId, type RequestStartEvent, type RequestStreamDeltaEvent, type RequestEndEvent, type RequestErrorEvent, type SDKEventMap, type SDKCapability, type Unsubscribe, } from "./events.js";
 export { ActivityTracker, type ActiveCall, type CompletedCall, type SessionStats, type ActivitySnapshot, } from "./activity-tracker.js";
 export { BrowserAuth, type BrowserAuthOptions, type BrowserUser } from "./browser-auth.js";
+export { SyncEngine, FilesRemote, installIndexedDBHook, type SyncOptions, type SyncState, type DbChange, type SyncRemote, type SyncDeps, } from "./idb-sync/index.js";
+export type { SyncStateEvent, DbChangeEvent } from "./events.js";
 export { APIError } from "./errors.js";
 export type { Usage } from "./types.js";
 export type { ChatMessage, ContentPart, ChatTool, StreamOptions, ChatCompletionParams, ChatToolCall, ChatChoiceMessage, ChatChoice, ChatCompletion, ChatChunkDelta, ChatChunkChoice, ChatCompletionChunk, } from "./chat.js";

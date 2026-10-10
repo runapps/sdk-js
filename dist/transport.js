@@ -109,18 +109,24 @@ export class Transport {
     /** GET path; return raw bytes + content-type (for video/audio downloads)
      *  and the ETag of those bytes, when the server sends one. */
     async getRaw(path, init) {
-        const resp = await this.fetchWithAuthRetry(path, async () => ({
-            method: "GET",
-            headers: await this.authHeaders(),
-            signal: init?.signal,
-        }));
+        const resp = await this.fetchWithAuthRetry(path, async () => {
+            const headers = await this.authHeaders();
+            if (init?.ifNoneMatch)
+                headers["If-None-Match"] = `"${init.ifNoneMatch.replace(/"/g, "")}"`;
+            return { method: "GET", headers, signal: init?.signal };
+        });
+        const serverTime = parseServerDate(resp.headers.get("date"));
+        if (resp.status === 304) {
+            const etag = (resp.headers.get("etag") ?? "").replace(/"/g, "") || init?.ifNoneMatch;
+            return { data: new Uint8Array(0), contentType: "", etag, notModified: true, serverTime };
+        }
         if (!resp.ok) {
             throw await this.parseError(resp);
         }
         const buf = new Uint8Array(await resp.arrayBuffer());
         const contentType = resp.headers.get("content-type") ?? "";
         const etag = (resp.headers.get("etag") ?? "").replace(/"/g, "") || undefined;
-        return { data: buf, contentType, etag };
+        return { data: buf, contentType, etag, serverTime };
     }
     /** POST a multipart/form-data body. Used by audio.transcribe and image.edit. */
     async postMultipart(path, form, init) {
@@ -224,5 +230,12 @@ export class Transport {
         }
         return new APIError(resp.status, type, message);
     }
+}
+/** The server's clock from a Date header, as ms since epoch. */
+export function parseServerDate(h) {
+    if (!h)
+        return undefined;
+    const t = Date.parse(h);
+    return Number.isNaN(t) ? undefined : t;
 }
 //# sourceMappingURL=transport.js.map

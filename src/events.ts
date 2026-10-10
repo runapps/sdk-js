@@ -93,11 +93,33 @@ export interface RequestErrorEvent {
 /** Compile-time map of event name → payload shape. Drives handler
  *  inference in `on()` / `emit()` so callers can't subscribe to a
  *  typo'd name or read a non-existent field. */
+/** Fired whenever the IndexedDB sync's state, pending count or last
+ *  sync time changes. See `client.sync`. */
+export interface SyncStateEvent {
+  state: "off" | "idle" | "syncing" | "offline" | "error";
+  pending: number;
+  lastSyncedAt?: number;
+  error?: string;
+}
+
+/** Fired after the sync wrote remote changes into a local object store,
+ *  in this tab and (through BroadcastChannel) in the app's other tabs.
+ *  Re-read the store to show the new data. */
+export interface DbChangeEvent {
+  db: string;
+  store: string;
+  keys: IDBValidKey[];
+  cleared: boolean;
+  source: "remote";
+}
+
 export interface SDKEventMap {
   "request:start": RequestStartEvent;
   "request:streamDelta": RequestStreamDeltaEvent;
   "request:end": RequestEndEvent;
   "request:error": RequestErrorEvent;
+  "sync:state": SyncStateEvent;
+  "db:change": DbChangeEvent;
 }
 
 /** Disposer returned by `on()` — call to unsubscribe. */

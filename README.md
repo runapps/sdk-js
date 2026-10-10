@@ -265,6 +265,33 @@ try {
 
 Paths are at most 900 bytes, and a single file is at most 200 MB.
 
+## IndexedDB sync
+
+An app on RunApps that keeps its data in IndexedDB gets that data on every device the user signs in on, with no code for it. The SDK observes the databases the app opens, pushes committed writes a few seconds later, pulls other devices' changes whenever the page is opened, focused or comes back online, and shows the state on the badge. It is **on by default** in an app on RunApps (browser sign-in mode) and off for personal keys and Node.
+
+```ts
+const client = new RunApps();                       // sync on: every database the app opens
+new RunApps({ syncIndexedDB: false });              // off
+new RunApps({ syncIndexedDB: { databases: ["notes"], exclude: ["notes/thumbnails"] } });
+```
+
+The app keeps using IndexedDB as before, directly or through Dexie, idb, idb-keyval and the like. The first `indexedDB.open` of a database on a new device waits (up to 5 s) for the user's data to arrive, so the first read already sees it. When another device's changes are applied, `db:change` names the store and keys so the app can re-read:
+
+```ts
+client.events.on("db:change", ({ db, store, keys, cleared }) => refresh(store));
+client.sync.status();   // { state: "idle" | "syncing" | "offline" | "error" | "off", pending, lastSyncedAt }
+await client.sync.now(); // push and pull right away
+```
+
+What syncs: every write that commits — `put`, `add`, `delete`, `clear`, cursor edits — with Dates, Maps, Sets, typed arrays and Blobs intact. Two devices editing one record keep both edits when they changed different fields of a plain object; otherwise the later write wins. Deleting a database drops its synced copy too. Data lives in the user's file space for the app under `db/`, so it counts as the user's storage.
+
+Keep in mind:
+
+- **Use your own keys.** `crypto.randomUUID()` or any key the app chooses. `autoIncrement` keys are assigned per device, so two devices creating records offline collide and the later one wins.
+- **Leave out what is local.** Caches, decoded media and anything large or rebuildable: `exclude: ["app/cache"]` (a store) or `exclude: ["cache"]` (a whole database). Databases whose names start with `__runapps` are never synced.
+- **Another user signing in** on the same browser starts from their own data; the previous user's synced stores are cleared locally.
+- The badge shows the state: blue pulse while syncing, amber when offline or retrying, and the popover lists pending changes and the last sync time.
+
 ## Models
 
 ```ts
@@ -385,6 +412,8 @@ Every call takes `{ signal }` for cancellation.
 | `client.embeddings` | `create` |
 
 Browser sign-in: `client.signIn()`, `client.signOut()`, `client.user`, `client.auth`.
+
+IndexedDB sync: `client.sync.status()`, `now()`, `pause()`, `resume()`; option `syncIndexedDB`; events `sync:state`, `db:change`.
 
 Helpers: `hasCapabilityTag`, `acceptsModality`, `getOptionsSchema`, `acceptsField`, `requiresField`, `allowedValuesFor`, `validateRequest`, `supportsVoiceClone`, `supportsInstructText`, `defaultVoice`, `encodeImageUrl`, `decodeMediaUrl`, `ServerTools`, and the message builders `userMessage`, `systemMessage`, `assistantMessage`, `toolResultMessage`, `userMessageParts`, `textPart`, `imagePart`, `videoPart`, `audioPart`.
 

@@ -21,6 +21,7 @@
 // window.opener relationship for cross-origin popups, so popup-based
 // grant flows silently lose their postMessage replies.
 import { ActivityTracker } from "./activity-tracker.js";
+import { hash32 } from "./idb-sync/codec.js";
 const TOKEN_REFRESH_MARGIN_S = 60;
 // Per-project localStorage namespacing.  When two BrowserAuth bundles
 // live on the same origin (most commonly `localhost:5173` during
@@ -227,6 +228,19 @@ export class BrowserAuth {
      */
     hasFreshToken() {
         return this.tokenIsFresh();
+    }
+    /**
+     * A stable id for whose data is on this browser, or null when nobody
+     * is signed in. The user's id when the grant carried one; otherwise
+     * derived from the token, which is bound to one user and one app and
+     * never rotates. Used by IndexedDB sync to tell an account switch.
+     */
+    ownerId() {
+        if (!this.tokenIsFresh())
+            return null;
+        if (this.userInfo?.id)
+            return this.userInfo.id;
+        return "t" + hash32(this.token).toString(36);
     }
     /**
      * Clear the cached token / user / badge and the persisted copy in
@@ -459,7 +473,7 @@ export class BrowserAuth {
             .forEach((kv) => {
             const i = kv.indexOf("=");
             if (i >= 0)
-                params[decodeURIComponent(kv.slice(0, i))] = decodeURIComponent(kv.slice(i + 1));
+                params[decodeURIComponent(kv.slice(0, i))] = decodeURIComponent(kv.slice(i + 1).replace(/\+/g, " "));
         });
         const token = params.runapps_token || params.runjobs_token;
         if (!token)
@@ -1179,10 +1193,28 @@ function updateRing(ring, arc, circ, snap) {
 }
 function updateLED(led, snap) {
     switch (snap.status) {
-        case "idle":
-            led.style.background = "rgba(255,255,255,0.2)";
-            led.style.boxShadow = "0 0 0 0 transparent";
+        case "idle": {
+            // Nothing in flight: the LED shows the sync instead — blue pulse
+            // while syncing, amber while changes wait offline or after a
+            // failed attempt, grey when everything is on the server.
+            const sync = snap.sync;
+            if (sync && sync.state === "syncing") {
+                led.style.background = "#3b82f6";
+                led.style.boxShadow = "0 0 0 0 rgba(59,130,246,0.7)";
+                led.style.animation = "__runapps_led_pulse__ 1.2s ease-out infinite";
+            }
+            else if (sync && (sync.state === "offline" || sync.state === "error")) {
+                led.style.background = "#f59e0b";
+                led.style.boxShadow = "0 0 0 2px rgba(245,158,11,0.3)";
+                led.style.animation = "";
+            }
+            else {
+                led.style.background = "rgba(255,255,255,0.2)";
+                led.style.boxShadow = "0 0 0 0 transparent";
+                led.style.animation = "";
+            }
             break;
+        }
         case "active":
             led.style.background = "#3b82f6";
             // CSS-driven pulse via box-shadow ring expanding outward —
@@ -1278,7 +1310,40 @@ function updatePopover(pop, snap) {
     const now = Date.now();
     inner.appendChild(renderActiveSection(snap, now));
     inner.appendChild(renderRecentSection(snap, now));
+    if (snap.sync)
+        inner.appendChild(renderSyncSection(snap.sync, now));
     inner.appendChild(renderSessionSection(snap.session, now));
+}
+function renderSyncSection(sync, now) {
+    const sec = document.createElement("div");
+    sec.style.marginBottom = "10px";
+    const hint = sync.lastSyncedAt ? `synced ${relativeTime(now - sync.lastSyncedAt)}` : "—";
+    sec.appendChild(sectionLabel("Sync", hint));
+    const row = document.createElement("div");
+    row.style.cssText = "display:flex;justify-content:space-between;gap:8px;padding:3px 0;font-size:10px";
+    const left = document.createElement("span");
+    const dot = document.createElement("span");
+    dot.textContent = "● ";
+    const label = {
+        off: ["Not signed in", "rgba(255,255,255,0.4)"],
+        idle: ["Up to date", "#10b981"],
+        syncing: ["Syncing…", "#3b82f6"],
+        offline: ["Offline", "#f59e0b"],
+        error: ["Retrying", "#f59e0b"],
+    };
+    const [text, color] = label[sync.state] ?? ["", "#fff"];
+    dot.style.color = color;
+    left.style.color = "#fff";
+    left.appendChild(dot);
+    left.appendChild(document.createTextNode(text));
+    const right = document.createElement("span");
+    right.style.cssText = "color:rgba(255,255,255,0.7);font-variant-numeric:tabular-nums";
+    right.textContent = sync.pending > 0 ? `${sync.pending} pending` : "";
+    right.title = sync.error ?? "";
+    row.appendChild(left);
+    row.appendChild(right);
+    sec.appendChild(row);
+    return sec;
 }
 function renderActiveSection(snap, now) {
     const sec = document.createElement("div");

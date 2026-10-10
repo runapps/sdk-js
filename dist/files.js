@@ -78,11 +78,12 @@ export class FilesService {
      * still the version that was read.
      */
     async read(path, init) {
-        const { data, contentType, etag } = await this.transport.getRaw(pathToURL(this.base, path), init);
+        const { data, contentType, etag, notModified } = await this.transport.getRaw(pathToURL(this.base, path), init);
         return {
             blob: new Blob([new Uint8Array(data)], { type: contentType || "application/octet-stream" }),
             contentType,
             etag,
+            ...(notModified ? { notModified: true } : {}),
         };
     }
     /**
@@ -102,6 +103,8 @@ export class FilesService {
             }
             throw e;
         }
+        if (r.notModified)
+            return { value: undefined, etag: r.etag, notModified: true };
         return { value: JSON.parse(await r.blob.text()), etag: r.etag };
     }
     /** Stat: HEAD-only object metadata. */

@@ -83,10 +83,13 @@ export declare class Transport {
      *  and the ETag of those bytes, when the server sends one. */
     getRaw(path: string, init?: {
         signal?: AbortSignal;
+        ifNoneMatch?: string;
     }): Promise<{
         data: Uint8Array;
         contentType: string;
         etag?: string;
+        notModified?: boolean;
+        serverTime?: number;
     }>;
     /** POST a multipart/form-data body. Used by audio.transcribe and image.edit. */
     postMultipart<T>(path: string, form: FormData, init?: {
@@ -123,4 +126,6 @@ export declare class Transport {
     private authHeaders;
     private parseError;
 }
+/** The server's clock from a Date header, as ms since epoch. */
+export declare function parseServerDate(h: string | null): number | undefined;
 //# sourceMappingURL=transport.d.ts.map

@@ -66,6 +66,13 @@ export interface ActivitySnapshot {
     active: ActiveCall[];
     recent: CompletedCall[];
     session: SessionStats;
+    /** IndexedDB sync state, when sync is on (see `client.sync`). */
+    sync?: {
+        state: "off" | "idle" | "syncing" | "offline" | "error";
+        pending: number;
+        lastSyncedAt?: number;
+        error?: string;
+    };
     /** Highest-priority status colour for the LED dot:
      *    "error"   → recent failure within ERROR_HIGHLIGHT_MS
      *    "active"  → at least one in-flight call
@@ -86,6 +93,7 @@ export declare class ActivityTracker {
      *  ring/LED stayed idle until the user opened the popover —
      *  events landed in the tracker but nobody told the DOM. */
     private changeListeners;
+    private sync;
     /**
      * Subscribe the tracker to a bus. Returns a single disposer that
      * unsubscribes all four handlers — callers (BrowserAuth in our

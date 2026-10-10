@@ -8,6 +8,7 @@ import { ComputerService } from "./computer.js";
 import { FilesService } from "./files.js";
 import { EmbeddingsService } from "./embeddings.js";
 import { BrowserAuth } from "./browser-auth.js";
+import { FilesRemote, SyncEngine } from "./idb-sync/index.js";
 import { SDKEvents } from "./events.js";
 // The platform, not the bare gateway: personal rk_ keys are checked and
 // billed by www.runapps.ai, which forwards to the gateway. api.runapps.ai
@@ -52,6 +53,13 @@ export class RunApps {
      * subscription, etc.).
      */
     auth = null;
+    /**
+     * IndexedDB sync (see `ClientOptions.syncIndexedDB`), or null when it
+     * is off. `status()` gives the state the badge shows; `now()` pushes
+     * and pulls immediately; `client.events.on("db:change", …)` tells the
+     * app which store received remote changes so it can re-read.
+     */
+    sync = null;
     /**
      * Runtime event bus for SDK-call telemetry. Every LLM-ish service
      * (chat / embeddings / image / audio / video / computer) fires
@@ -139,6 +147,20 @@ export class RunApps {
         // legacy unscoped /v1/files/... paths.
         this.files = new FilesService(transport, options.project);
         this.embeddings = new EmbeddingsService(transport, this.events);
+        // IndexedDB sync: an app on RunApps gets it unless it says no. It
+        // stores under the signed-in user, so only browser sign-in mode has
+        // someone to sync for.
+        const wantSync = options.syncIndexedDB ?? this.auth !== null;
+        if (wantSync && typeof indexedDB !== "undefined" && this.auth) {
+            const auth = this.auth;
+            const engine = new SyncEngine({
+                remote: new FilesRemote(this.files),
+                events: this.events,
+                userId: () => auth.ownerId(),
+                onAuthChange: (cb) => auth.onTokenChange(() => cb()),
+            }, typeof wantSync === "object" ? wantSync : {});
+            this.sync = engine;
+        }
     }
     /** Force a redirect to the runapps.ai grant page.  No-op in static
      *  auth mode or in Node. */

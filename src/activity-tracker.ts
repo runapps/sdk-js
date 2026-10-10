@@ -85,6 +85,8 @@ export interface ActivitySnapshot {
   active: ActiveCall[];
   recent: CompletedCall[];
   session: SessionStats;
+  /** IndexedDB sync state, when sync is on (see `client.sync`). */
+  sync?: { state: "off" | "idle" | "syncing" | "offline" | "error"; pending: number; lastSyncedAt?: number; error?: string };
   /** Highest-priority status colour for the LED dot:
    *    "error"   → recent failure within ERROR_HIGHLIGHT_MS
    *    "active"  → at least one in-flight call
@@ -116,6 +118,7 @@ export class ActivityTracker {
    *  ring/LED stayed idle until the user opened the popover —
    *  events landed in the tracker but nobody told the DOM. */
   private changeListeners = new Set<() => void>();
+  private sync: ActivitySnapshot["sync"] | undefined = undefined;
 
   /**
    * Subscribe the tracker to a bus. Returns a single disposer that
@@ -128,6 +131,7 @@ export class ActivityTracker {
       events.on("request:streamDelta", (e) => { this.onDelta(e); this.notify(); }),
       events.on("request:end", (e) => { this.onEnd(e); this.notify(); }),
       events.on("request:error", (e) => { this.onError(e); this.notify(); }),
+      events.on("sync:state", (e) => { this.sync = { ...e }; this.notify(); }),
     ];
     return () => {
       for (const o of offs) o();
@@ -165,6 +169,7 @@ export class ActivityTracker {
       active: Array.from(this.active.values()),
       recent: this.recent.slice(),
       session: { ...this.session },
+      ...(this.sync ? { sync: { ...this.sync } } : {}),
       status:
         now - this.lastErrorAt < ERROR_HIGHLIGHT_MS
           ? "error"
