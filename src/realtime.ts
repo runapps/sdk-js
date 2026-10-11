@@ -30,6 +30,15 @@ import type { Transport } from "./transport.js";
  * Audio input must arrive at real-time pace (send ~20 ms chunks as they
  * are captured); the model also expects a steady stream, so keep sending
  * silence — or `mute()` — while the microphone is off.
+ *
+ * Transcription models (e.g. "Doubao ASR 2.0 Streaming") use the same
+ * session for live speech-to-text: `session.created` carries
+ * `session.mode: "transcription"`, `session.hotwords` (array or
+ * comma-separated string) favours words, and only the
+ * `…input_audio_transcription.started / .delta / .completed` events come
+ * back — `.delta` holds the sentence so far, `.completed` a finished
+ * sentence with `start_ms` / `end_ms`. `commitAudio()` or `close()` ends
+ * the audio; the last sentence settles before the session closes.
  */
 
 /** One protocol event. `type` names it; the rest depends on the event. */
@@ -70,7 +79,8 @@ export interface WebSocketLike {
 export type WebSocketConstructor = new (url: string, protocols?: string | string[]) => WebSocketLike;
 
 export interface RealtimeConnectOptions {
-  /** Realtime model name (e.g. "Doubao Realtime Voice"); omit for the platform default. */
+  /** Realtime model name (e.g. "Doubao Realtime Voice", or "Doubao ASR 2.0
+   *  Streaming" for live speech-to-text); omit for the platform default. */
   model?: string;
   /**
    * Session settings sent in the opening `session.create`, e.g.
@@ -181,7 +191,9 @@ export class RealtimeSession {
     this.send({ type: "input_audio_buffer.append", audio: bytesToBase64(asBytes(pcm16)) });
   }
 
-  /** Tell the model the user has finished speaking (skips end-of-speech detection). */
+  /** Tell the model the user has finished speaking (skips end-of-speech
+   *  detection). For a transcription model this ends the audio: the last
+   *  sentence settles, then the session closes. */
   commitAudio(): void {
     this.send({ type: "input_audio_buffer.commit" });
   }

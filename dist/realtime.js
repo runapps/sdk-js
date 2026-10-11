@@ -84,7 +84,9 @@ export class RealtimeSession {
     appendAudio(pcm16) {
         this.send({ type: "input_audio_buffer.append", audio: bytesToBase64(asBytes(pcm16)) });
     }
-    /** Tell the model the user has finished speaking (skips end-of-speech detection). */
+    /** Tell the model the user has finished speaking (skips end-of-speech
+     *  detection). For a transcription model this ends the audio: the last
+     *  sentence settles, then the session closes. */
     commitAudio() {
         this.send({ type: "input_audio_buffer.commit" });
     }

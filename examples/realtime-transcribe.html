@@ -1,0 +1,153 @@
+<!doctype html>
+<!--
+  Live captions in the browser: speak into the microphone and the text
+  appears while you talk — the current sentence keeps updating, finished
+  sentences settle.
+
+  As an app on RunApps, `new RunApps()` signs the user in and bills them.
+  To try it locally, serve this file from http://localhost (microphone
+  access needs localhost or https) and pass a key while developing:
+  `new RunApps({ apiKey: "rk_..." })` — never ship a key in a page.
+-->
+<html lang="zh">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Live captions</title>
+  <style>
+    body { font: 16px/1.5 system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 16px; }
+    label { display: block; margin-bottom: .75rem; }
+    input { font: inherit; width: 100%; box-sizing: border-box; padding: .4rem; }
+    button { font: inherit; padding: .5rem 1rem; margin-right: .5rem; }
+    #status { color: #666; }
+    #lines p { margin: .4rem 0; }
+    #lines time { color: #999; font-size: .8em; margin-right: .5rem; }
+    #partial { color: #888; min-height: 1.5em; }
+  </style>
+</head>
+<body>
+  <h1>Live captions</h1>
+  <label>Hotwords (optional)
+    <input id="hotwords" placeholder="Names or jargon, comma-separated">
+  </label>
+  <button id="start">Start</button>
+  <button id="stop" disabled>Stop</button>
+  <p id="status">Idle</p>
+  <div id="lines"></div>
+  <p id="partial"></p>
+
+  <script src="https://www.runapps.ai/sdk/latest.js"></script>
+  <script>
+    const client = new RunApps();
+    const MODEL = "Doubao ASR 2.0 Streaming";
+
+    // Captures the microphone in 100 ms Float32 chunks off the audio thread.
+    const CAPTURE_WORKLET = `
+      class PcmCapture extends AudioWorkletProcessor {
+        constructor(options) {
+          super();
+          this.buf = new Float32Array(options.processorOptions.chunk);
+          this.n = 0;
+        }
+        process(inputs) {
+          const ch = inputs[0][0];
+          if (ch) {
+            for (let i = 0; i < ch.length; i++) {
+              this.buf[this.n++] = ch[i];
+              if (this.n === this.buf.length) {
+                this.port.postMessage(this.buf.slice());
+                this.n = 0;
+              }
+            }
+          }
+          return true;
+        }
+      }
+      registerProcessor("pcm-capture", PcmCapture);`;
+
+    const $ = (id) => document.getElementById(id);
+    let session, stream, micCtx;
+
+    function addLine(e) {
+      const p = document.createElement("p");
+      const t = document.createElement("time");
+      t.textContent = (e.start_ms / 1000).toFixed(1) + "s";
+      p.append(t, e.text);
+      $("lines").append(p);
+    }
+
+    $("start").onclick = async () => {
+      $("start").disabled = true;
+      $("status").textContent = "Connecting…";
+      const hotwords = $("hotwords").value.trim();
+      try {
+        session = await client.realtime.connect({
+          model: MODEL,
+          session: hotwords ? { hotwords } : {},
+        });
+      } catch (err) {
+        $("status").textContent = "Could not connect: " + err.message;
+        $("start").disabled = false;
+        return;
+      }
+
+      // `delta` is the sentence so far: replace the grey line with it.
+      session.on("conversation.item.input_audio_transcription.delta", (e) => ($("partial").textContent = e.delta));
+      session.on("conversation.item.input_audio_transcription.completed", (e) => {
+        $("partial").textContent = "";
+        addLine(e);
+      });
+      session.on("error", (e) => ($("status").textContent = "Error: " + (e.error?.message ?? JSON.stringify(e.error))));
+      session.closed.then(({ code, usage }) => {
+        $("status").textContent = `Ended (${code})` + (usage ? ` — ${usage.seconds} s, $${usage.total_cost}` : "");
+        teardown();
+      });
+
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+      });
+      // Ask for 16 kHz so the browser resamples the mic; pcm16FromFloat32
+      // resamples anyway if it picks another rate.
+      micCtx = new AudioContext({ sampleRate: 16000 });
+      const url = URL.createObjectURL(new Blob([CAPTURE_WORKLET], { type: "text/javascript" }));
+      await micCtx.audioWorklet.addModule(url);
+      const capture = new AudioWorkletNode(micCtx, "pcm-capture", {
+        processorOptions: { chunk: Math.round(micCtx.sampleRate * 0.1) },
+      });
+      capture.port.onmessage = (e) => {
+        if (session) session.appendAudio(RunApps.pcm16FromFloat32(e.data, micCtx.sampleRate));
+      };
+      micCtx.createMediaStreamSource(stream).connect(capture);
+      // A silent sink keeps the capture node running.
+      const sink = micCtx.createGain();
+      sink.gain.value = 0;
+      capture.connect(sink).connect(micCtx.destination);
+
+      $("status").textContent = "Listening — just talk.";
+      $("stop").disabled = false;
+    };
+
+    // Stop: the microphone goes off, the last sentence settles, then the
+    // session ends and reports what it cost.
+    $("stop").onclick = async () => {
+      $("stop").disabled = true;
+      $("status").textContent = "Finishing…";
+      stopMic();
+      await session.close();
+    };
+
+    function stopMic() {
+      stream?.getTracks().forEach((t) => t.stop());
+      micCtx?.close();
+      stream = micCtx = null;
+    }
+
+    function teardown() {
+      session = null;
+      stopMic();
+      $("start").disabled = false;
+      $("stop").disabled = true;
+    }
+  </script>
+</body>
+</html>

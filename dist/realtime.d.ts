@@ -33,7 +33,8 @@ export interface WebSocketLike {
 }
 export type WebSocketConstructor = new (url: string, protocols?: string | string[]) => WebSocketLike;
 export interface RealtimeConnectOptions {
-    /** Realtime model name (e.g. "Doubao Realtime Voice"); omit for the platform default. */
+    /** Realtime model name (e.g. "Doubao Realtime Voice", or "Doubao ASR 2.0
+     *  Streaming" for live speech-to-text); omit for the platform default. */
     model?: string;
     /**
      * Session settings sent in the opening `session.create`, e.g.
@@ -94,7 +95,9 @@ export declare class RealtimeSession {
      * (640 bytes) at a time, as it is captured.
      */
     appendAudio(pcm16: Int16Array | Uint8Array | ArrayBuffer): void;
-    /** Tell the model the user has finished speaking (skips end-of-speech detection). */
+    /** Tell the model the user has finished speaking (skips end-of-speech
+     *  detection). For a transcription model this ends the audio: the last
+     *  sentence settles, then the session closes. */
     commitAudio(): void;
     /** The microphone is off: stops the model waiting on audio. */
     mute(): void;

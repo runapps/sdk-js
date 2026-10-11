@@ -377,6 +377,26 @@ A session can't outspend the account: it ends with close code 4402 when its cost
 
 Events follow the model's realtime protocol (`session.created`, `…input_audio_transcription.delta`, `response.output_audio.delta`, `response.done`, `error`, …); `session.on("*", …)` sees them all, `for await (const e of session)` iterates them, and `session.send(event)` sends any. The model expects a continuous stream: keep sending silence, or `mute()`, while the microphone is off. On Node < 22 pass `WebSocket` from the `ws` package to `connect()`. Runnable examples: [`examples/realtime-voice.html`](examples/realtime-voice.html) (microphone in the browser) and [`examples/realtime-file.mjs`](examples/realtime-file.mjs) (stream a recording from Node).
 
+### Streaming speech recognition
+
+The same session API does live speech-to-text with a transcription model such as `"Doubao ASR 2.0 Streaming"`: stream audio up and the text comes back while it is still being said. Billed per second of audio.
+
+```ts
+const session = await client.realtime.connect({
+  model: "Doubao ASR 2.0 Streaming",
+  session: { hotwords: ["RunApps", "豆包"] }, // optional: words to favour
+});
+// The sentence so far, updated as you speak — replace, don't append.
+session.on("conversation.item.input_audio_transcription.delta", (e) => showPartial(e.delta));
+// A finished sentence, with its position in the audio.
+session.on("conversation.item.input_audio_transcription.completed", (e) => addLine(e.text, e.start_ms, e.end_ms));
+
+session.appendAudio(chunk);                 // 16 kHz mono PCM16, at the pace it is captured
+const { usage } = await session.close();    // end of audio: the last sentence settles first
+```
+
+`session.created` reports `session.mode === "transcription"` for these models. For a finished recording, `client.audio.transcribe()` is simpler. Runnable examples: [`examples/realtime-transcribe.html`](examples/realtime-transcribe.html) (live captions from the microphone) and [`examples/realtime-transcribe.mjs`](examples/realtime-transcribe.mjs) (stream a recording from Node).
+
 Without the SDK, open a WebSocket to `wss://www.runapps.ai/v1/realtime?model=<name>[&max_cost=<USD>]` with `Authorization: Bearer <key>`, or from a browser with the subprotocols `["realtime", "runapps-key.<key>"]`. The last frame before the server closes is `{"type":"gateway.usage","usage":{…,"total_cost":…}}`.
 
 ## HTTP API
@@ -391,7 +411,7 @@ Base URL `https://www.runapps.ai`. Send `Authorization: Bearer <key or app token
 | `POST /v1/images/edits` | Edit an image |
 | `POST /v1/audio/speech` | Text to speech |
 | `POST /v1/audio/transcriptions` | Speech to text (a `file`, or a public `url`) |
-| `GET /v1/realtime` (WebSocket) | Realtime voice session |
+| `GET /v1/realtime` (WebSocket) | Realtime voice session, or streaming speech recognition |
 | `GET /v1/audio/voices` | Voices for a speech model |
 | `POST /v1/videos/generations` | Start a video job |
 | `GET /v1/videos/generations/<id>` | Job status |
