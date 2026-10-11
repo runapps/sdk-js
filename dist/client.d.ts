@@ -2,6 +2,7 @@ import { ChatService } from "./chat.js";
 import { ModelsService } from "./models.js";
 import { ImageService } from "./image.js";
 import { AudioService } from "./audio.js";
+import { RealtimeService } from "./realtime.js";
 import { VideoService } from "./video.js";
 import { ComputerService } from "./computer.js";
 import { FilesService } from "./files.js";
@@ -129,6 +130,8 @@ export declare class RunApps {
     readonly computer: ComputerService;
     readonly files: FilesService;
     readonly embeddings: EmbeddingsService;
+    /** Realtime voice sessions over WebSocket — see `RealtimeService.connect`. */
+    readonly realtime: RealtimeService;
     /**
      * Browser auth helper, populated only when `authProvider: "runapps"`.
      * Use `client.signIn()` and `client.user` for the common cases; the

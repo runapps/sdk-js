@@ -27,6 +27,10 @@ export class Transport {
             return await this.apiKeyResolver();
         return this.apiKey ?? "";
     }
+    /** The current bearer token, for connections fetch can't make (WebSocket). */
+    bearerToken() {
+        return this.resolveToken();
+    }
     /**
      * Wrap a fetch call with single-attempt 401 retry.  `build` produces a
      * fresh RequestInit each call (so headers can re-resolve a fresh token,

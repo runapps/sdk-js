@@ -235,6 +235,12 @@ function buildTranscribeForm(model, params) {
     }
     if (params.user)
         form.set("user", params.user);
+    if (!params.file) {
+        if (!params.url)
+            throw new Error("runapps: transcribe needs `file` or `url`");
+        form.set("url", params.url);
+        return form;
+    }
     const ct = params.file.contentType ?? guessAudioMime(params.file.filename);
     const blob = params.file.data instanceof Blob
         ? params.file.data

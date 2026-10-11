@@ -334,6 +334,7 @@ await client.image.edit("GPT Image", { image: { data: bytes, filename: "photo.pn
 // Speech.
 const speech = await client.audio.speech("MiniMax Speech 2.6 HD", { input: "Hello", voice: "English_radiant_girl", emotion: "happy" });
 const text = await client.audio.transcribe("OpenAI/Whisper", { file: { data: audioBytes, filename: "a.mp3" } });
+const fromUrl = await client.audio.transcribeAsync("Doubao ASR 2.0", { url: "https://…/talk.mp3" }); // no upload
 // speechAsync / transcribeAsync for long jobs; voices and emotions are in getOptionsSchema(model).catalog
 
 // Video: always async.
@@ -347,6 +348,35 @@ const e = await client.embeddings.create("text-embedding-3-small", { input: ["al
 
 `VideoGenerateParams` covers keyframes (`first_frame_url`, `last_frame_url`), reference inputs, source video, image and audio drivers, `service_tier: "flex"`, and more. Every `*_url` accepts `https://` or a `data:` URI (`encodeImageUrl(bytes)`).
 
+## Realtime voice
+
+A full-duplex voice conversation: stream the microphone up, get transcripts, text and the spoken reply back as they happen, and interrupt the model mid-sentence.
+
+```ts
+const session = await client.realtime.connect({
+  model: "Doubao Realtime Voice",
+  session: {
+    instructions: "You are a friendly voice assistant.",
+    audio: { output: { voice: "zh_female_vv_jupiter_bigtts", format: { type: "pcm_s16le", rate: 24000 } } },
+  },
+});
+session.on("conversation.item.input_audio_transcription.completed", (e) => console.log("you:", e.text));
+session.on("response.output_text.done", (e) => console.log("model:", e.text));
+session.on("response.output_audio.delta", (e) => play(base64ToBytes(e.delta))); // 24 kHz PCM16
+
+// 16 kHz mono PCM16, ~20 ms per call, at the pace it is captured.
+// In a browser: session.appendAudio(pcm16FromFloat32(float32Samples, audioContext.sampleRate))
+session.appendAudio(chunk);
+session.say("Hi! What can I do for you?"); // have the model speak
+session.cancelResponse();                   // interrupt it
+
+const { usage } = await session.close();    // usage.total_cost, in USD
+```
+
+Events follow the model's realtime protocol (`session.created`, `…input_audio_transcription.delta`, `response.output_audio.delta`, `response.done`, `error`, …); `session.on("*", …)` sees them all, `for await (const e of session)` iterates them, and `session.send(event)` sends any. The model expects a continuous stream: keep sending silence, or `mute()`, while the microphone is off. On Node < 22 pass `WebSocket` from the `ws` package to `connect()`. Runnable examples: [`examples/realtime-voice.html`](examples/realtime-voice.html) (microphone in the browser) and [`examples/realtime-file.mjs`](examples/realtime-file.mjs) (stream a recording from Node).
+
+Without the SDK, open a WebSocket to `wss://www.runapps.ai/v1/realtime?model=<name>` with `Authorization: Bearer <key>`, or from a browser with the subprotocols `["realtime", "runapps-key.<key>"]`. The last frame before the server closes is `{"type":"gateway.usage","usage":{…,"total_cost":…}}`.
+
 ## HTTP API
 
 Base URL `https://www.runapps.ai`. Send `Authorization: Bearer <key or app token>`.
@@ -358,7 +388,8 @@ Base URL `https://www.runapps.ai`. Send `Authorization: Bearer <key or app token
 | `POST /v1/images/generations` | Generate images |
 | `POST /v1/images/edits` | Edit an image |
 | `POST /v1/audio/speech` | Text to speech |
-| `POST /v1/audio/transcriptions` | Speech to text |
+| `POST /v1/audio/transcriptions` | Speech to text (a `file`, or a public `url`) |
+| `GET /v1/realtime` (WebSocket) | Realtime voice session |
 | `GET /v1/audio/voices` | Voices for a speech model |
 | `POST /v1/videos/generations` | Start a video job |
 | `GET /v1/videos/generations/<id>` | Job status |
@@ -426,6 +457,7 @@ Every call takes `{ signal }` for cancellation.
 | `client.files` | `put`, `putString`, `putFromURL`, `get`, `read`, `readJSON`, `stat`, `exists`, `list`, `del`, `deleteMany`, `move`, `copy`, `batch` |
 | `client.image` | `generate`, `edit`, `generateAsync`, `submitGenerate`, `getAsyncStatus` |
 | `client.audio` | `speech`, `speechAsync`, `transcribe`, `transcribeAsync` |
+| `client.realtime` | `connect` → session: `on`, `send`, `appendAudio`, `commitAudio`, `mute`, `unmute`, `say`, `cancelResponse`, `update`, `sendFunctionResult`, `close`, `closed` |
 | `client.video` | `generate`, `getStatus`, `wait`, `getContent` |
 | `client.embeddings` | `create` |
 
@@ -433,7 +465,7 @@ Browser sign-in: `client.signIn()`, `client.signOut()`, `client.user`, `client.a
 
 Sync: `client.sync.status()`, `now()`, `pause()`, `resume()`; option `sync`; events `sync:state`, `db:change`.
 
-Helpers: `hasCapabilityTag`, `acceptsModality`, `getOptionsSchema`, `acceptsField`, `requiresField`, `allowedValuesFor`, `validateRequest`, `supportsVoiceClone`, `supportsInstructText`, `defaultVoice`, `encodeImageUrl`, `decodeMediaUrl`, `ServerTools`, and the message builders `userMessage`, `systemMessage`, `assistantMessage`, `toolResultMessage`, `userMessageParts`, `textPart`, `imagePart`, `videoPart`, `audioPart`.
+Helpers: `hasCapabilityTag`, `acceptsModality`, `getOptionsSchema`, `acceptsField`, `requiresField`, `allowedValuesFor`, `validateRequest`, `supportsVoiceClone`, `supportsInstructText`, `defaultVoice`, `encodeImageUrl`, `decodeMediaUrl`, `pcm16FromFloat32`, `float32FromPCM16`, `bytesToBase64`, `base64ToBytes`, `ServerTools`, and the message builders `userMessage`, `systemMessage`, `assistantMessage`, `toolResultMessage`, `userMessageParts`, `textPart`, `imagePart`, `videoPart`, `audioPart`.
 
 ### Addresses
 

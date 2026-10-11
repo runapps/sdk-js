@@ -1,0 +1,162 @@
+<!doctype html>
+<!--
+  Realtime voice in the browser: talk to the model through the microphone
+  and hear it answer — full duplex, so you can interrupt it mid-sentence.
+
+  As an app on RunApps, `new RunApps()` signs the user in and bills them.
+  To try it locally, serve this file from http://localhost (microphone
+  access needs localhost or https) and pass a key while developing:
+  `new RunApps({ apiKey: "rk_..." })` — never ship a key in a page.
+-->
+<html lang="zh">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Realtime voice</title>
+  <style>
+    body { font: 16px/1.5 system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 16px; }
+    button { font: inherit; padding: .5rem 1rem; margin-right: .5rem; }
+    #status { color: #666; }
+    #log p { margin: .4rem 0; }
+    #log b { display: inline-block; min-width: 2.5rem; }
+  </style>
+</head>
+<body>
+  <h1>Realtime voice</h1>
+  <button id="start">Start talking</button>
+  <button id="stop" disabled>Stop</button>
+  <p id="status">Idle</p>
+  <div id="log"></div>
+
+  <script src="https://www.runapps.ai/sdk/latest.js"></script>
+  <script>
+    const client = new RunApps();
+    const MODEL = "Doubao Realtime Voice";
+
+    // Captures the microphone in 20 ms Float32 chunks off the audio thread.
+    const CAPTURE_WORKLET = `
+      class PcmCapture extends AudioWorkletProcessor {
+        constructor(options) {
+          super();
+          this.buf = new Float32Array(options.processorOptions.chunk);
+          this.n = 0;
+        }
+        process(inputs) {
+          const ch = inputs[0][0];
+          if (ch) {
+            for (let i = 0; i < ch.length; i++) {
+              this.buf[this.n++] = ch[i];
+              if (this.n === this.buf.length) {
+                this.port.postMessage(this.buf.slice());
+                this.n = 0;
+              }
+            }
+          }
+          return true;
+        }
+      }
+      registerProcessor("pcm-capture", PcmCapture);`;
+
+    const $ = (id) => document.getElementById(id);
+    let session, stream, micCtx, outCtx, playHead = 0, playing = [];
+
+    function log(who, text) {
+      const p = document.createElement("p");
+      p.innerHTML = `<b></b> `;
+      p.firstChild.textContent = who;
+      p.append(text);
+      $("log").append(p);
+    }
+
+    // Queue a chunk of 24 kHz PCM16 reply audio right after the previous one.
+    function play(samples) {
+      const buf = outCtx.createBuffer(1, samples.length, 24000);
+      buf.copyToChannel(samples, 0);
+      const src = outCtx.createBufferSource();
+      src.buffer = buf;
+      src.connect(outCtx.destination);
+      playHead = Math.max(playHead, outCtx.currentTime);
+      src.start(playHead);
+      playHead += buf.duration;
+      playing.push(src);
+      src.onended = () => (playing = playing.filter((s) => s !== src));
+    }
+
+    // The user started talking over the model: drop what is still queued.
+    function stopPlayback() {
+      for (const src of playing) src.stop();
+      playing = [];
+      playHead = 0;
+    }
+
+    $("start").onclick = async () => {
+      $("start").disabled = true;
+      $("status").textContent = "Connecting…";
+      try {
+        session = await client.realtime.connect({
+          model: MODEL,
+          session: {
+            instructions: "你是一个简洁友好的语音助手。",
+            audio: { output: { voice: "zh_female_vv_jupiter_bigtts", format: { type: "pcm_s16le", rate: 24000 } } },
+          },
+        });
+      } catch (err) {
+        $("status").textContent = "Could not connect: " + err.message;
+        $("start").disabled = false;
+        return;
+      }
+
+      session.on("conversation.item.input_audio_transcription.started", stopPlayback);
+      session.on("conversation.item.input_audio_transcription.completed", (e) => log("You", e.text));
+      session.on("response.output_text.done", (e) => log("AI", e.text));
+      session.on("response.output_audio.delta", (e) => play(RunApps.float32FromPCM16(RunApps.base64ToBytes(e.delta))));
+      session.on("error", (e) => log("!", JSON.stringify(e.error)));
+      session.closed.then(({ code, usage }) => {
+        $("status").textContent = `Ended (${code})` + (usage ? ` — cost $${usage.total_cost}` : "");
+        teardown();
+      });
+
+      outCtx = new AudioContext({ sampleRate: 24000 });
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+      });
+      // Ask for 16 kHz so the browser resamples the mic; pcm16FromFloat32
+      // resamples anyway if it picks another rate.
+      micCtx = new AudioContext({ sampleRate: 16000 });
+      const url = URL.createObjectURL(new Blob([CAPTURE_WORKLET], { type: "text/javascript" }));
+      await micCtx.audioWorklet.addModule(url);
+      const capture = new AudioWorkletNode(micCtx, "pcm-capture", {
+        processorOptions: { chunk: Math.round(micCtx.sampleRate * 0.02) },
+      });
+      capture.port.onmessage = (e) => {
+        if (session) session.appendAudio(RunApps.pcm16FromFloat32(e.data, micCtx.sampleRate));
+      };
+      micCtx.createMediaStreamSource(stream).connect(capture);
+      // A silent sink keeps the capture node running.
+      const sink = micCtx.createGain();
+      sink.gain.value = 0;
+      capture.connect(sink).connect(micCtx.destination);
+
+      session.say("你好，我在听，请说吧。");
+      $("status").textContent = "Listening — just talk.";
+      $("stop").disabled = false;
+    };
+
+    $("stop").onclick = async () => {
+      $("stop").disabled = true;
+      $("status").textContent = "Ending…";
+      await session.close(); // resolves once the server has reported the cost
+    };
+
+    function teardown() {
+      session = null;
+      stopPlayback();
+      stream?.getTracks().forEach((t) => t.stop());
+      micCtx?.close();
+      outCtx?.close();
+      $("start").disabled = false;
+      $("stop").disabled = true;
+    }
+  </script>
+</body>
+</html>

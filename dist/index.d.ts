@@ -23,6 +23,8 @@ export type { ValidationError } from "./validate.js";
 export { validateRequest } from "./validate.js";
 export type { ImageGenerateParams, ImageResult, ImageUsage, ImageResponse, ImageEditParams, ImageFileInput, AsyncImageJob, } from "./image.js";
 export type { SpeechParams, SpeechResponse, TranscribeParams, TranscribeResponse, AudioFileInput, } from "./audio.js";
+export type { RealtimeEvent, RealtimeUsage, RealtimeCloseInfo, RealtimeConnectOptions, WebSocketLike, WebSocketConstructor, } from "./realtime.js";
+export { RealtimeSession, pcm16FromFloat32, float32FromPCM16, bytesToBase64, base64ToBytes, } from "./realtime.js";
 export type { VideoGenerateParams, VideoTask, VideoStatus, VideoUsageTokens, WaitOptions, } from "./video.js";
 export { encodeImageUrl, decodeMediaUrl } from "./media.js";
 export type { ComputerStepParams, ComputerContentBlock, ComputerResponse, } from "./computer.js";

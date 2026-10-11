@@ -24,6 +24,7 @@ export { userMessage, systemMessage, assistantMessage, toolResultMessage, userMe
 export { hasCapabilityTag, acceptsModality, supportsVoiceClone, supportsInstructText, defaultVoice, } from "./models.js";
 export { getOptionsSchema, acceptsField, requiresField, allowedValuesFor, } from "./model_options.js";
 export { validateRequest } from "./validate.js";
+export { RealtimeSession, pcm16FromFloat32, float32FromPCM16, bytesToBase64, base64ToBytes, } from "./realtime.js";
 // Media helpers (shared by image + video + chat-multimodal)
 export { encodeImageUrl, decodeMediaUrl } from "./media.js";
 // Server-tool names for chat.create({ server_tools }), with autocomplete.

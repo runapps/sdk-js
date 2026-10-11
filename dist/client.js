@@ -3,6 +3,7 @@ import { ChatService } from "./chat.js";
 import { ModelsService } from "./models.js";
 import { ImageService } from "./image.js";
 import { AudioService } from "./audio.js";
+import { RealtimeService } from "./realtime.js";
 import { VideoService } from "./video.js";
 import { ComputerService } from "./computer.js";
 import { FilesService } from "./files.js";
@@ -46,6 +47,8 @@ export class RunApps {
     computer;
     files;
     embeddings;
+    /** Realtime voice sessions over WebSocket — see `RealtimeService.connect`. */
+    realtime;
     /**
      * Browser auth helper, populated only when `authProvider: "runapps"`.
      * Use `client.signIn()` and `client.user` for the common cases; the
@@ -147,6 +150,7 @@ export class RunApps {
         // legacy unscoped /v1/files/... paths.
         this.files = new FilesService(transport, options.project, this.events);
         this.embeddings = new EmbeddingsService(transport, this.events);
+        this.realtime = new RealtimeService(transport, this.events);
         // Sync: an app on RunApps gets it unless it says no. It
         // stores under the signed-in user, so only browser sign-in mode has
         // someone to sync for.

@@ -82,7 +82,13 @@ export interface AudioFileInput {
 }
 
 export interface TranscribeParams {
-  file: AudioFileInput;
+  /** The audio to transcribe. Either this or `url`. */
+  file?: AudioFileInput;
+  /**
+   * A public URL of the audio, instead of uploading it — for models that
+   * fetch audio themselves (e.g. "Doubao ASR 2.0"); no upload size limit.
+   */
+  url?: string;
   language?: string;
   prompt?: string;
   response_format?: string;
@@ -409,6 +415,11 @@ function buildTranscribeForm(model: string, params: TranscribeParams): FormData 
   }
   if (params.user) form.set("user", params.user);
 
+  if (!params.file) {
+    if (!params.url) throw new Error("runapps: transcribe needs `file` or `url`");
+    form.set("url", params.url);
+    return form;
+  }
   const ct = params.file.contentType ?? guessAudioMime(params.file.filename);
   const blob =
     params.file.data instanceof Blob

@@ -23,6 +23,8 @@
  */
 /** Capability bucket of the calling service, mirroring /v1/models. */
 export type SDKCapability = "text" | "vision" | "embedding" | "image_generation" | "image_edit" | "text_to_speech" | "speech_to_text" | "video_generation" | "computer_use"
+/** A realtime voice session (`client.realtime`). */
+ | "realtime"
 /** A file-space call (`client.files`). Shown on the badge while in
  *  flight and on failure, but not listed or charged per call. */
  | "files";

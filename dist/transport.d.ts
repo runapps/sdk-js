@@ -42,6 +42,8 @@ export declare class Transport {
     constructor(opts: TransportOptions);
     /** Resolve the bearer token for the next request. */
     private resolveToken;
+    /** The current bearer token, for connections fetch can't make (WebSocket). */
+    bearerToken(): Promise<string>;
     /**
      * Wrap a fetch call with single-attempt 401 retry.  `build` produces a
      * fresh RequestInit each call (so headers can re-resolve a fresh token,

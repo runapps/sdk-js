@@ -60,7 +60,13 @@ export interface AudioFileInput {
     contentType?: string;
 }
 export interface TranscribeParams {
-    file: AudioFileInput;
+    /** The audio to transcribe. Either this or `url`. */
+    file?: AudioFileInput;
+    /**
+     * A public URL of the audio, instead of uploading it — for models that
+     * fetch audio themselves (e.g. "Doubao ASR 2.0"); no upload size limit.
+     */
+    url?: string;
     language?: string;
     prompt?: string;
     response_format?: string;

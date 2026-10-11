@@ -126,6 +126,23 @@ export type {
   AudioFileInput,
 } from "./audio.js";
 
+// Realtime voice
+export type {
+  RealtimeEvent,
+  RealtimeUsage,
+  RealtimeCloseInfo,
+  RealtimeConnectOptions,
+  WebSocketLike,
+  WebSocketConstructor,
+} from "./realtime.js";
+export {
+  RealtimeSession,
+  pcm16FromFloat32,
+  float32FromPCM16,
+  bytesToBase64,
+  base64ToBytes,
+} from "./realtime.js";
+
 // Video
 export type {
   VideoGenerateParams,
