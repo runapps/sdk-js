@@ -74,6 +74,7 @@ test("realtime.connect authenticates by subprotocol and opens with session.creat
     session: { instructions: "be brief", audio: { output: { voice: "v1" } } },
     extension: { dialog: { extra: { strict_audit: false } } },
     query: { lang: "zh" },
+    maxCost: 0.5,
     WebSocket: FakeWebSocket,
   });
   const ws = sockets[0];
@@ -83,6 +84,7 @@ test("realtime.connect authenticates by subprotocol and opens with session.creat
   assert.equal(url.pathname, "/v1/realtime");
   assert.equal(url.searchParams.get("model"), "Doubao Realtime Voice");
   assert.equal(url.searchParams.get("lang"), "zh");
+  assert.equal(url.searchParams.get("max_cost"), "0.5");
   assert.deepEqual(ws.protocols, ["realtime", "runapps-key.rk_test123"]);
   assert.equal(ws.sent[0].type, "session.create");
   assert.equal(ws.sent[0].session.instructions, "be brief");
@@ -191,4 +193,21 @@ test("transcribe accepts a url instead of a file", async () => {
   assert.equal(form.get("file"), null);
   assert.equal(form.get("language"), "zh-CN");
   await assert.rejects(client.audio.transcribe("m", {}), /needs `file` or `url`/);
+});
+
+test("a session cut by its spending cap closes with 4402 and still reports the cost", async () => {
+  const { FakeWebSocket } = fakeWebSocket((ws, event) => {
+    if (event.type === "session.create") ws.serverSend({ type: "session.created", session: { id: "s" } });
+    if (event.type === "speech_text_buffer.commit") {
+      ws.serverSend({ type: "gateway.usage", usage: { total_cost: 0.1 } });
+      ws.close(4402, "spending cap reached");
+    }
+  });
+  const client = new RunApps({ apiKey: "rk_x" });
+  const session = await client.realtime.connect({ WebSocket: FakeWebSocket, maxCost: 0.1 });
+  session.say("hi");
+  const info = await session.closed;
+  assert.equal(info.code, 4402);
+  assert.equal(info.reason, "spending cap reached");
+  assert.equal(info.usage.total_cost, 0.1);
 });

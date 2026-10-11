@@ -247,7 +247,10 @@ export class RealtimeService {
                     ws.send(JSON.stringify(openingEvent(options)));
                 });
                 void session.closed.then((info) => {
-                    fail(new Error(`runapps: realtime connection closed (${info.code}${info.reason ? " " + info.reason : ""})`));
+                    // A refused handshake (bad key, unknown model, low balance) reaches
+                    // a WebSocket client only as 1006 — the HTTP status is hidden.
+                    const hint = info.code === 1006 ? " — check the API key, the model name and the account balance" : "";
+                    fail(new Error(`runapps: realtime connection closed (${info.code}${info.reason ? " " + info.reason : ""})${hint}`));
                 });
             });
         }
@@ -293,6 +296,8 @@ function realtimeURL(baseURL, options) {
         u.searchParams.set(k, v);
     if (options.model)
         u.searchParams.set("model", options.model);
+    if (options.maxCost !== undefined && options.maxCost > 0)
+        u.searchParams.set("max_cost", String(options.maxCost));
     return u.toString();
 }
 /* ------------------------------------------------------------------ */

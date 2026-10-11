@@ -373,9 +373,11 @@ session.cancelResponse();                   // interrupt it
 const { usage } = await session.close();    // usage.total_cost, in USD
 ```
 
+A session can't outspend the account: it ends with close code 4402 when its cost reaches the remaining balance (or today's budget). Pass `maxCost` (USD) to `connect()` for a lower cap; `session.closed` resolves with the code and the final `usage` either way.
+
 Events follow the model's realtime protocol (`session.created`, `…input_audio_transcription.delta`, `response.output_audio.delta`, `response.done`, `error`, …); `session.on("*", …)` sees them all, `for await (const e of session)` iterates them, and `session.send(event)` sends any. The model expects a continuous stream: keep sending silence, or `mute()`, while the microphone is off. On Node < 22 pass `WebSocket` from the `ws` package to `connect()`. Runnable examples: [`examples/realtime-voice.html`](examples/realtime-voice.html) (microphone in the browser) and [`examples/realtime-file.mjs`](examples/realtime-file.mjs) (stream a recording from Node).
 
-Without the SDK, open a WebSocket to `wss://www.runapps.ai/v1/realtime?model=<name>` with `Authorization: Bearer <key>`, or from a browser with the subprotocols `["realtime", "runapps-key.<key>"]`. The last frame before the server closes is `{"type":"gateway.usage","usage":{…,"total_cost":…}}`.
+Without the SDK, open a WebSocket to `wss://www.runapps.ai/v1/realtime?model=<name>[&max_cost=<USD>]` with `Authorization: Bearer <key>`, or from a browser with the subprotocols `["realtime", "runapps-key.<key>"]`. The last frame before the server closes is `{"type":"gateway.usage","usage":{…,"total_cost":…}}`.
 
 ## HTTP API
 

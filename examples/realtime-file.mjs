@@ -40,20 +40,22 @@ session.on("conversation.item.input_audio_transcription.completed", (e) => conso
 session.on("response.output_text.done", (e) => console.log("model says:", e.text));
 session.on("response.output_audio.delta", (e) => reply.push(base64ToBytes(e.delta)));
 session.on("response.done", () => (turnDone = true));
+let ended = false; // e.g. 4402 when the session hits its spending cap
+void session.closed.then(() => (ended = true));
 session.on("error", (e) => console.error("error:", e.error));
 
 // Real-time pace: 20 ms (640 bytes) every 20 ms, then silence until the
 // model has answered — the model expects a continuous stream.
 const audio = readFileSync(input);
 const silence = new Uint8Array(640);
-for (let off = 0; !turnDone; off += 640) {
+for (let off = 0; !turnDone && !ended; off += 640) {
   session.appendAudio(off < audio.length ? audio.subarray(off, off + 640) : silence);
   await new Promise((r) => setTimeout(r, 20));
   if (off > audio.length + 30 * 32000) break; // 30 s of silence and no answer: give up
 }
 
-const { usage } = await session.close();
-console.log("cost: $" + (usage?.total_cost ?? "?"), usage);
+const { code, reason, usage } = await session.close();
+console.log(`closed ${code}${reason ? " " + reason : ""}, cost: $${usage?.total_cost ?? "?"}`);
 writeFileSync(output, wav(Buffer.concat(reply), 24000));
 console.log("saved", output);
 

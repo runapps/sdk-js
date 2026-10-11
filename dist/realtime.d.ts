@@ -16,8 +16,9 @@ export interface RealtimeUsage {
 }
 /** How a session ended. */
 export interface RealtimeCloseInfo {
-    /** WebSocket close code: 1000 when the session completed; 4000+N for an
-     *  upstream HTTP error N (e.g. 4429); 4408 idle or over-long session. */
+    /** WebSocket close code: 1000 when the session completed; 4402 when the
+     *  spending cap was reached (`maxCost`, or the account's balance); 4000+N
+     *  for an upstream HTTP error N (e.g. 4429); 4408 idle or over-long session. */
     code: number;
     reason: string;
     /** Null when the session ended before the cost could be reported. */
@@ -41,6 +42,12 @@ export interface RealtimeConnectOptions {
     session?: Record<string, unknown>;
     /** Model-specific extension block (Doubao: `{ asr, tts, dialog }`). */
     extension?: Record<string, unknown>;
+    /**
+     * End the session (close code 4402) once it has cost this many USD. The
+     * account's remaining balance always caps a session; this sets a lower
+     * cap. Checked after each turn, so the last turn may go slightly over.
+     */
+    maxCost?: number;
     /** Extra query parameters for the handshake. */
     query?: Record<string, string>;
     /**

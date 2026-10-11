@@ -50,8 +50,9 @@ export interface RealtimeUsage {
 
 /** How a session ended. */
 export interface RealtimeCloseInfo {
-  /** WebSocket close code: 1000 when the session completed; 4000+N for an
-   *  upstream HTTP error N (e.g. 4429); 4408 idle or over-long session. */
+  /** WebSocket close code: 1000 when the session completed; 4402 when the
+   *  spending cap was reached (`maxCost`, or the account's balance); 4000+N
+   *  for an upstream HTTP error N (e.g. 4429); 4408 idle or over-long session. */
   code: number;
   reason: string;
   /** Null when the session ended before the cost could be reported. */
@@ -78,6 +79,12 @@ export interface RealtimeConnectOptions {
   session?: Record<string, unknown>;
   /** Model-specific extension block (Doubao: `{ asr, tts, dialog }`). */
   extension?: Record<string, unknown>;
+  /**
+   * End the session (close code 4402) once it has cost this many USD. The
+   * account's remaining balance always caps a session; this sets a lower
+   * cap. Checked after each turn, so the last turn may go slightly over.
+   */
+  maxCost?: number;
   /** Extra query parameters for the handshake. */
   query?: Record<string, string>;
   /**
@@ -336,7 +343,10 @@ export class RealtimeService {
           ws.send(JSON.stringify(openingEvent(options)));
         });
         void session.closed.then((info) => {
-          fail(new Error(`runapps: realtime connection closed (${info.code}${info.reason ? " " + info.reason : ""})`));
+          // A refused handshake (bad key, unknown model, low balance) reaches
+          // a WebSocket client only as 1006 — the HTTP status is hidden.
+          const hint = info.code === 1006 ? " — check the API key, the model name and the account balance" : "";
+          fail(new Error(`runapps: realtime connection closed (${info.code}${info.reason ? " " + info.reason : ""})${hint}`));
         });
       });
     } catch (err) {
@@ -380,6 +390,7 @@ function realtimeURL(baseURL: string, options: RealtimeConnectOptions): string {
   u.protocol = u.protocol === "http:" ? "ws:" : "wss:";
   for (const [k, v] of Object.entries(options.query ?? {})) u.searchParams.set(k, v);
   if (options.model) u.searchParams.set("model", options.model);
+  if (options.maxCost !== undefined && options.maxCost > 0) u.searchParams.set("max_cost", String(options.maxCost));
   return u.toString();
 }
 
