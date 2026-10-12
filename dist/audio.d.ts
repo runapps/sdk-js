@@ -68,7 +68,9 @@ export interface TranscribeParams {
      */
     url?: string;
     language?: string;
-    prompt?: string;
+    /** A vocabulary hint for the model, as text or a private prompt
+     *  `{ id, vars }` (or a list; see `PromptInput`). */
+    prompt?: string | PromptInput;
     response_format?: string;
     timestamp_granularities?: ("segment" | "word")[];
     user?: string;

@@ -225,7 +225,7 @@ function buildTranscribeForm(model, params) {
     if (params.language)
         form.set("language", params.language);
     if (params.prompt)
-        form.set("prompt", params.prompt);
+        form.set("prompt", typeof params.prompt === "string" ? params.prompt : JSON.stringify(params.prompt));
     if (params.response_format)
         form.set("response_format", params.response_format);
     if (params.timestamp_granularities) {

@@ -90,7 +90,10 @@ export interface TranscribeParams {
    */
   url?: string;
   language?: string;
-  prompt?: string;
+
+  /** A vocabulary hint for the model, as text or a private prompt
+   *  `{ id, vars }` (or a list; see `PromptInput`). */
+  prompt?: string | PromptInput;
   response_format?: string;
   timestamp_granularities?: ("segment" | "word")[];
   user?: string;
@@ -406,7 +409,7 @@ function buildTranscribeForm(model: string, params: TranscribeParams): FormData 
   const form = new FormData();
   form.set("model", model);
   if (params.language) form.set("language", params.language);
-  if (params.prompt) form.set("prompt", params.prompt);
+  if (params.prompt) form.set("prompt", typeof params.prompt === "string" ? params.prompt : JSON.stringify(params.prompt));
   if (params.response_format) form.set("response_format", params.response_format);
   if (params.timestamp_granularities) {
     for (const g of params.timestamp_granularities) {
