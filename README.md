@@ -203,6 +203,28 @@ await client.chat.create({
 
 **Your own tools.** Pass `tools: [{ type: "function", function: { name, description, parameters } }]`, read `choices[0].message.tool_calls`, and answer with `toolResultMessage(toolCallId, output)` on the next turn.
 
+**Structured outputs.** `response_format` makes the reply JSON that matches a schema; it works on Claude (sent as `output_config.format`) as well as OpenAI-style models. Add `strict: true` to a tool to guarantee its arguments match `parameters`.
+
+```ts
+const res = await client.chat.create({
+  model: "Claude Sonnet 4.6",
+  messages: [userMessage("Extract the contact: Ann Lee, ann@example.com")],
+  response_format: {
+    type: "json_schema",
+    json_schema: {
+      name: "contact",
+      schema: {
+        type: "object",
+        properties: { name: { type: "string" }, email: { type: "string" } },
+        required: ["name", "email"],
+        additionalProperties: false,
+      },
+    },
+  },
+});
+const contact = JSON.parse(res.choices[0].message.content ?? "{}");
+```
+
 ### Server tools
 
 The platform can search and read the web for the model, looping until it answers. Your code only sees the final reply.

@@ -40,8 +40,33 @@ export interface ChatTool {
     name: string;
     description?: string;
     parameters?: Record<string, unknown>;
+    /**
+     * Guarantee arguments that validate against `parameters` (strict tool
+     * use). The schema should list `required` fields and close every
+     * object with `additionalProperties: false`.
+     */
+    strict?: boolean;
   };
 }
+
+/**
+ * Constrains the reply. `json_schema` makes the reply a JSON document
+ * matching `schema` (structured outputs: on Claude it becomes
+ * `output_config.format`, and objects that leave `additionalProperties`
+ * unset are closed for you); `json_object` asks for any JSON object.
+ */
+export type ChatResponseFormat =
+  | { type: "text" }
+  | { type: "json_object" }
+  | {
+      type: "json_schema";
+      json_schema: {
+        name: string;
+        description?: string;
+        schema: Record<string, unknown>;
+        strict?: boolean;
+      };
+    };
 
 export interface StreamOptions {
   include_usage: boolean;
@@ -108,6 +133,8 @@ export interface ChatCompletionParams {
   n?: number;
   tools?: ChatTool[];
   tool_choice?: unknown;
+  /** Structured outputs — see {@link ChatResponseFormat}. */
+  response_format?: ChatResponseFormat;
   user?: string;
   metadata?: Record<string, unknown>;
   stream?: boolean;

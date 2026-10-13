@@ -55,6 +55,7 @@ export type {
   ChatMessage,
   ContentPart,
   ChatTool,
+  ChatResponseFormat,
   StreamOptions,
   ChatCompletionParams,
   ChatToolCall,
