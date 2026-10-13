@@ -107,7 +107,7 @@
       }
 
       session.on("conversation.item.input_audio_transcription.started", stopPlayback);
-      session.on("conversation.item.input_audio_transcription.completed", (e) => log("You", e.text));
+      session.on("conversation.item.input_audio_transcription.completed", (e) => log("You", e.transcript));
       session.on("response.output_text.done", (e) => log("AI", e.text));
       session.on("response.output_audio.delta", (e) => play(RunApps.float32FromPCM16(RunApps.base64ToBytes(e.delta))));
       session.on("error", (e) => log("!", JSON.stringify(e.error)));

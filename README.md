@@ -382,7 +382,7 @@ const session = await client.realtime.connect({
     audio: { output: { voice: "zh_female_vv_jupiter_bigtts", format: { type: "pcm_s16le", rate: 24000 } } },
   },
 });
-session.on("conversation.item.input_audio_transcription.completed", (e) => console.log("you:", e.text));
+session.on("conversation.item.input_audio_transcription.completed", (e) => console.log("you:", e.transcript));
 session.on("response.output_text.done", (e) => console.log("model:", e.text));
 session.on("response.output_audio.delta", (e) => play(base64ToBytes(e.delta))); // 24 kHz PCM16
 
@@ -408,16 +408,17 @@ const session = await client.realtime.connect({
   model: "Doubao ASR 2.0 Streaming",
   session: { hotwords: ["RunApps", "豆包"] }, // optional: words to favour
 });
-// The sentence so far, updated as you speak — replace, don't append.
-session.on("conversation.item.input_audio_transcription.delta", (e) => showPartial(e.delta));
+// e.delta is only the new text (append it, as with OpenAI's Realtime API);
+// e.transcript is the sentence so far, revisions included — show that.
+session.on("conversation.item.input_audio_transcription.delta", (e) => showPartial(e.transcript));
 // A finished sentence, with its position in the audio.
-session.on("conversation.item.input_audio_transcription.completed", (e) => addLine(e.text, e.start_ms, e.end_ms));
+session.on("conversation.item.input_audio_transcription.completed", (e) => addLine(e.transcript, e.start_ms, e.end_ms));
 
 session.appendAudio(chunk);                 // 16 kHz mono PCM16, at the pace it is captured
 const { usage } = await session.close();    // end of audio: the last sentence settles first
 ```
 
-`session.created` reports `session.mode === "transcription"` for these models. For a finished recording, `client.audio.transcribe()` is simpler. Runnable examples: [`examples/realtime-transcribe.html`](examples/realtime-transcribe.html) (live captions from the microphone) and [`examples/realtime-transcribe.mjs`](examples/realtime-transcribe.mjs) (stream a recording from Node).
+Transcription events follow OpenAI's Realtime API: `delta` is only the newly recognised text, so OpenAI-style code that appends deltas works unchanged; `transcript` on each delta is the sentence so far (the recognizer may revise earlier words: `transcript` shows the revision, while `delta` only ever carries text past what earlier deltas delivered, so appended text keeps up but may hold a few stale characters), and `completed.transcript` is the final sentence (`text` holds the same, for older code). `session.created` reports `session.mode === "transcription"` for these models. For a finished recording, `client.audio.transcribe()` is simpler. Runnable examples: [`examples/realtime-transcribe.html`](examples/realtime-transcribe.html) (live captions from the microphone) and [`examples/realtime-transcribe.mjs`](examples/realtime-transcribe.mjs) (stream a recording from Node).
 
 Without the SDK, open a WebSocket to `wss://www.runapps.ai/v1/realtime?model=<name>[&max_cost=<USD>]` with `Authorization: Bearer <key>`, or from a browser with the subprotocols `["realtime", "runapps-key.<key>"]`. The last frame before the server closes is `{"type":"gateway.usage","usage":{…,"total_cost":…}}`.
 

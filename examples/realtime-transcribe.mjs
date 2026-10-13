@@ -37,14 +37,15 @@ const session = await client.realtime.connect({
   maxCost: 0.05, // USD; this model bills per second of audio
 });
 
-// `delta` is the sentence so far — replace the line, don't append to it.
+// `transcript` is the sentence so far, revisions included — redraw the line
+// with it. (`delta` is only the new text, for code that appends.)
 const live = process.stdout.isTTY;
 session.on("conversation.item.input_audio_transcription.delta", (e) => {
-  if (live) process.stdout.write(`\r\x1b[2K… ${e.delta}`);
+  if (live) process.stdout.write(`\r\x1b[2K… ${e.transcript}`);
 });
 session.on("conversation.item.input_audio_transcription.completed", (e) => {
   if (live) process.stdout.write("\r\x1b[2K");
-  console.log(`[${secs(e.start_ms)}–${secs(e.end_ms)}] ${e.text}`);
+  console.log(`[${secs(e.start_ms)}–${secs(e.end_ms)}] ${e.transcript}`);
 });
 session.on("error", (e) => console.error("\nerror:", e.error));
 let ended = false; // e.g. 4402 when the session hits maxCost

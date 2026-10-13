@@ -72,7 +72,7 @@
       const p = document.createElement("p");
       const t = document.createElement("time");
       t.textContent = (e.start_ms / 1000).toFixed(1) + "s";
-      p.append(t, e.text);
+      p.append(t, e.transcript);
       $("lines").append(p);
     }
 
@@ -91,8 +91,9 @@
         return;
       }
 
-      // `delta` is the sentence so far: replace the grey line with it.
-      session.on("conversation.item.input_audio_transcription.delta", (e) => ($("partial").textContent = e.delta));
+      // `transcript` is the sentence so far, revisions included: show it in
+      // the grey line. (`delta` is only the new text, for code that appends.)
+      session.on("conversation.item.input_audio_transcription.delta", (e) => ($("partial").textContent = e.transcript));
       session.on("conversation.item.input_audio_transcription.completed", (e) => {
         $("partial").textContent = "";
         addLine(e);

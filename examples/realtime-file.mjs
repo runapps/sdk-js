@@ -36,7 +36,7 @@ console.log("session", session.sessionId);
 
 const reply = [];
 let turnDone = false;
-session.on("conversation.item.input_audio_transcription.completed", (e) => console.log("you said:", e.text));
+session.on("conversation.item.input_audio_transcription.completed", (e) => console.log("you said:", e.transcript));
 session.on("response.output_text.done", (e) => console.log("model says:", e.text));
 session.on("response.output_audio.delta", (e) => reply.push(base64ToBytes(e.delta)));
 session.on("response.done", () => (turnDone = true));

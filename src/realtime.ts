@@ -19,7 +19,9 @@ import type { Transport } from "./transport.js";
  *   → response.cancel                    interrupt the reply
  *   → session.close                      (close() sends it)
  *   ← session.created
- *   ← conversation.item.input_audio_transcription.delta / .completed   (what the user said)
+ *   ← conversation.item.input_audio_transcription.delta / .completed   (what the user said:
+ *        delta = only the new text, as OpenAI's Realtime API; transcript = the
+ *        sentence so far; completed.transcript = the final sentence)
  *   ← response.output_text.delta / .done                                (what the model says)
  *   ← response.output_audio.delta        {delta: base64 PCM16, 24 kHz mono by default}
  *   ← response.done                      one turn finished, with token usage
@@ -36,8 +38,9 @@ import type { Transport } from "./transport.js";
  * `session.mode: "transcription"`, `session.hotwords` (array or
  * comma-separated string) favours words, and only the
  * `…input_audio_transcription.started / .delta / .completed` events come
- * back — `.delta` holds the sentence so far, `.completed` a finished
- * sentence with `start_ms` / `end_ms`. `commitAudio()` or `close()` ends
+ * back — `.delta` carries the new text in `delta` (append it) and the
+ * sentence so far, revisions included, in `transcript`; `.completed` a
+ * finished sentence (`transcript`) with `start_ms` / `end_ms`. `commitAudio()` or `close()` ends
  * the audio; the last sentence settles before the session closes.
  */
 
