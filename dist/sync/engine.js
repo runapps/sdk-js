@@ -81,6 +81,12 @@ function mergeRecord(cur, inc, changed) {
     return { k: inc.k, v: out, t: Math.max(cur.t, inc.t), f };
 }
 const TOMBSTONE_TTL_MS = 30 * 24 * 3600 * 1000;
+/** Shards one push writes at a time. Each is a read-merge-write against
+ *  the files API, so the push is latency bound: done one by one, a few
+ *  hundred records over every shard took a minute and a half. */
+const PUSH_CONCURRENCY = 6;
+/** Shard copies kept, with their etags, so a write needs no read first. */
+const SHARD_CACHE_MAX = 256;
 const MAX_PUSH_DELAY_MS = 10_000;
 const BACKOFF_MIN_MS = 5_000;
 const BACKOFF_MAX_MS = 5 * 60_000;
@@ -112,6 +118,15 @@ export class SyncEngine {
     clock = new Clock();
     schemas = new Map();
     etags = new Map();
+    /** The last copy of a shard this engine read or wrote, with its etag:
+     *  the next write merges into it and sends If-Match, and only a 412
+     *  (someone else wrote in between) costs a read. Oldest first. */
+    shardCache = new Map();
+    /** Every shard path the last listing showed, and the prefixes that
+     *  listing covered: a path under a covered prefix that isn't listed
+     *  does not exist, and is created with If-None-Match, unread. */
+    listedPaths = new Set();
+    listedPrefixes = new Set();
     conns = new Map();
     state = { state: "off", pending: 0 };
     paused = false;
@@ -469,6 +484,9 @@ export class SyncEngine {
             }
             await this.log.clearAll();
             this.etags.clear();
+            this.shardCache.clear();
+            this.listedPaths.clear();
+            this.listedPrefixes.clear();
             this.metaLoaded = null;
             await this.loadMeta();
         }
@@ -538,15 +556,24 @@ export class SyncEngine {
                 groups.set(k, (g = []));
             g.push(op);
         }
-        const done = [];
-        const etagUpdates = {};
+        const idsOf = (list) => list.map((op) => op.id).filter((id) => id !== undefined);
+        // Ops leave the log as soon as the shard holding them is written, so
+        // `pending` counts down while a long push runs, and a push cut short
+        // keeps only what really is still unsent.
+        const settle = async (ids) => {
+            if (ids.length === 0)
+                return;
+            await this.log.remove(ids);
+            this.moved = true;
+            await this.refreshPending();
+        };
+        const limit = limiter(PUSH_CONCURRENCY);
+        const work = [];
         for (const [, g] of groups) {
             const db = g[0].db;
             const store = g[0].store;
             if (this.storeExcluded(db, store)) {
-                for (const op of g)
-                    if (op.id !== undefined)
-                        done.push(op.id);
+                work.push(settle(idsOf(g)));
                 continue;
             }
             // A clear drops everything written before it; ops after the last
@@ -569,22 +596,21 @@ export class SyncEngine {
                 list.push(op);
             }
             const shards = clearedAt > 0 ? Array.from({ length: this.options.shards }, (_, i) => i) : Array.from(byShard.keys());
-            for (const n of shards) {
+            const written = shards.map((n) => limit(async () => {
                 const path = this.shardPath(db, store, n);
                 const shardOps = byShard.get(n) ?? [];
                 const encoded = await Promise.all(shardOps.map((op) => this.encodeOp(op)));
                 const etag = await this.writeShard(path, clearedAt, encoded);
-                etagUpdates["etag:" + path] = etag;
-            }
-            for (const op of g)
-                if (op.id !== undefined)
-                    done.push(op.id);
+                await this.log.setMeta({ ["etag:" + path]: etag });
+                await settle(idsOf(shardOps));
+            }));
+            // The clear itself, and what it superseded, once every shard is.
+            work.push(Promise.all(written).then(() => settle(idsOf(g.slice(0, lastClear + 1)))));
         }
-        await this.log.setMeta(etagUpdates);
-        await this.log.remove(done);
-        if (done.length > 0)
-            this.moved = true;
-        await this.refreshPending();
+        const results = await Promise.allSettled(work);
+        const failed = results.find((r) => r.status === "rejected");
+        if (failed)
+            throw failed.reason;
     }
     async encodeOp(op) {
         if (op.kind === "del")
@@ -592,10 +618,17 @@ export class SyncEngine {
         const v = await encodeValue(op.value, (blob) => this.storeBlob(blob));
         return { kid: op.kid, rec: { k: op.key, v, t: op.ts }, changed: op.changed };
     }
-    /** Merge ops into one shard and write it; retried on a 412. */
+    /** Merge ops into one shard and write it; retried on a 412. The first
+     *  try starts from the cached copy, or from nothing when the last
+     *  listing showed no such shard — no read either way. */
     async writeShard(path, clearedAt, ops) {
         for (let attempt = 0; attempt < 5; attempt++) {
-            const { shard, etag } = await this.readShard(path);
+            const cached = attempt === 0 ? this.shardCache.get(path) : undefined;
+            const { shard, etag } = cached
+                ? { shard: copyShard(cached.shard), etag: cached.etag }
+                : attempt === 0 && this.knownAbsent(path)
+                    ? { shard: { v: 1, cleared: 0, r: {} }, etag: undefined }
+                    : await this.readShard(path);
             const now = this.clock.now();
             if (clearedAt > shard.cleared) {
                 shard.cleared = clearedAt;
@@ -621,11 +654,42 @@ export class SyncEngine {
                 if (r.serverTime)
                     this.clock.observe(r.serverTime, before, Date.now());
                 this.etags.set(path, r.etag);
+                this.cacheShard(path, r.etag, shard);
+                this.listedPaths.add(path);
                 return r.etag;
             }
             this.etags.delete(path);
+            this.shardCache.delete(path);
+            this.listedPaths.add(path); // it exists after all
         }
         throw new Error(`could not write ${path}: too many concurrent writers`);
+    }
+    cacheShard(path, etag, shard) {
+        this.shardCache.delete(path);
+        this.shardCache.set(path, { etag, shard });
+        while (this.shardCache.size > SHARD_CACHE_MAX) {
+            const oldest = this.shardCache.keys().next().value;
+            if (oldest === undefined)
+                break;
+            this.shardCache.delete(oldest);
+        }
+    }
+    knownAbsent(path) {
+        if (this.listedPaths.has(path))
+            return false;
+        for (const p of this.listedPrefixes)
+            if (path.startsWith(p))
+                return true;
+        return false;
+    }
+    /** Remember what a listing of `prefix` showed (see listedPaths). */
+    rememberListing(prefix, listing) {
+        for (const p of [...this.listedPaths])
+            if (p.startsWith(prefix))
+                this.listedPaths.delete(p);
+        for (const e of listing)
+            this.listedPaths.add(e.path);
+        this.listedPrefixes.add(prefix);
     }
     async storeBlob(blob) {
         const bytes = new Uint8Array(await blob.arrayBuffer());
@@ -637,14 +701,18 @@ export class SyncEngine {
     }
     // ── Pull ─────────────────────────────────────────────────────────
     async pull() {
-        const listing = await this.deps.remote.list(this.options.prefix + "/");
+        const prefix = this.options.prefix + "/";
+        const listing = await this.deps.remote.list(prefix);
+        this.rememberListing(prefix, listing);
         await this.applyListing(listing);
     }
     async pullDatabase(name) {
         if (!this.deps.userId())
             return;
         await this.loadMeta();
-        const listing = await this.deps.remote.list(`${this.options.prefix}/${pathSeg(name)}/`);
+        const prefix = `${this.options.prefix}/${pathSeg(name)}/`;
+        const listing = await this.deps.remote.list(prefix);
+        this.rememberListing(prefix, listing);
         await this.applyListing(listing);
     }
     async applyListing(listing) {
@@ -675,6 +743,8 @@ export class SyncEngine {
             }
             const s = r.value;
             const shard = { v: 1, cleared: s?.cleared ?? 0, r: s?.r ?? {} };
+            // Cached before applying: applyShard annotates the records.
+            this.cacheShard(entry.path, r.etag, copyShard(shard));
             await this.applyShard(db, store, shard, pending);
             this.etags.set(entry.path, r.etag);
             etagUpdates["etag:" + entry.path] = r.etag;
@@ -797,4 +867,32 @@ export class SyncEngine {
     }
 }
 export { idbRequest };
+/** A shard is plain JSON: a deep copy is a JSON round trip. */
+function copyShard(shard) {
+    return JSON.parse(JSON.stringify(shard));
+}
+/** Run at most `n` of the given tasks at once. */
+function limiter(n) {
+    let active = 0;
+    const queue = [];
+    const next = () => {
+        if (active >= n)
+            return;
+        const start = queue.shift();
+        if (start)
+            start();
+    };
+    return (task) => new Promise((resolve, reject) => {
+        queue.push(() => {
+            active++;
+            task()
+                .then(resolve, reject)
+                .finally(() => {
+                active--;
+                next();
+            });
+        });
+        next();
+    });
+}
 //# sourceMappingURL=engine.js.map

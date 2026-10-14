@@ -434,3 +434,117 @@ test("unchanged shards cost no download on the next pull", async () => {
     A.dispose();
   }
 });
+
+// ── Push speed: parallel shards, no read before a write ─────────────
+
+/** A remote whose writes take a while, counting how many overlap. */
+function slowRemote(ms = 20) {
+  const remote = new MemoryRemote();
+  const put = remote.putJSON.bind(remote);
+  remote.inFlight = 0;
+  remote.maxInFlight = 0;
+  remote.putJSON = async (...args) => {
+    remote.inFlight++;
+    remote.maxInFlight = Math.max(remote.maxInFlight, remote.inFlight);
+    try {
+      await sleep(ms);
+      return await put(...args);
+    } finally {
+      remote.inFlight--;
+    }
+  };
+  return remote;
+}
+
+test("a push writes several shards at once", async () => {
+  const remote = slowRemote();
+  const A = device(remote);
+  try {
+    const db = await A.openApp();
+    await A.write(db, "notes", (st) => {
+      for (let i = 0; i < 64; i++) st.put({ id: "n" + i });
+    });
+    await A.engine.now();
+    assert.ok(remote.maxInFlight > 1, `writes overlapped (max ${remote.maxInFlight})`);
+    assert.ok(remote.maxInFlight <= 6, "but no more than six at a time");
+    assert.equal(Object.keys(remote.records("app", "notes")).length, 64);
+    assert.equal(A.engine.status().pending, 0);
+    db.close();
+  } finally {
+    A.dispose();
+  }
+});
+
+test("pending counts down while a push runs", async () => {
+  const remote = slowRemote();
+  const A = device(remote);
+  try {
+    const db = await A.openApp();
+    await A.write(db, "notes", (st) => {
+      for (let i = 0; i < 64; i++) st.put({ id: "n" + i });
+    });
+    await A.engine.now();
+    const seen = A.states.map((s) => s.pending);
+    assert.ok(seen.some((p) => p > 0 && p < 64), `intermediate counts reported: ${seen.join(",")}`);
+    db.close();
+  } finally {
+    A.dispose();
+  }
+});
+
+test("a shard the listing lacks is created without a read", async () => {
+  const remote = new MemoryRemote();
+  const A = device(remote);
+  try {
+    const db = await A.openApp(); // the open lists the database: nothing there
+    const gets = remote.gets;
+    await A.write(db, "notes", (st) => st.put({ id: "n1" }));
+    await A.engine.now();
+    assert.equal(remote.gets, gets, "created with If-None-Match, unread");
+    assert.ok(remote.records("app", "notes")['"n1"']);
+    db.close();
+  } finally {
+    A.dispose();
+  }
+});
+
+test("writing a shard again needs no read", async () => {
+  const remote = new MemoryRemote();
+  const A = device(remote);
+  try {
+    const db = await A.openApp();
+    await A.write(db, "notes", (st) => st.put({ id: "n1", v: 1 }));
+    await A.engine.now();
+    const gets = remote.gets;
+    await A.write(db, "notes", (st) => st.put({ id: "n1", v: 2 }));
+    await A.engine.now();
+    assert.equal(remote.gets, gets, "merged into the cached copy, sent with If-Match");
+    assert.equal(remote.records("app", "notes")['"n1"'].v.v, 2);
+    db.close();
+  } finally {
+    A.dispose();
+  }
+});
+
+test("a cached shard someone else changed since is re-read and merged", async () => {
+  const remote = new MemoryRemote();
+  const A = device(remote, { options: { shards: 1 } });
+  try {
+    const db = await A.openApp();
+    await A.write(db, "notes", (st) => st.put({ id: "mine", v: 1 }));
+    await A.engine.now();
+    // Another device writes the same shard: our cached etag is stale.
+    const [path, o] = [...remote.objects.entries()].find(([p]) => p.includes("/notes/"));
+    const shard = JSON.parse(o.body);
+    shard.r['"theirs"'] = { k: "theirs", v: { id: "theirs" }, t: Date.now() };
+    remote.objects.set(path, { body: JSON.stringify(shard), etag: "x" + ++remote.seq });
+    await A.write(db, "notes", (st) => st.put({ id: "mine", v: 2 }));
+    await A.engine.now();
+    const recs = remote.records("app", "notes");
+    assert.ok(recs['"theirs"'], "their record survives");
+    assert.equal(recs['"mine"'].v.v, 2);
+    db.close();
+  } finally {
+    A.dispose();
+  }
+});

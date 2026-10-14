@@ -89,6 +89,15 @@ export declare class SyncEngine {
     private readonly clock;
     private readonly schemas;
     private readonly etags;
+    /** The last copy of a shard this engine read or wrote, with its etag:
+     *  the next write merges into it and sends If-Match, and only a 412
+     *  (someone else wrote in between) costs a read. Oldest first. */
+    private readonly shardCache;
+    /** Every shard path the last listing showed, and the prefixes that
+     *  listing covered: a path under a covered prefix that isn't listed
+     *  does not exist, and is created with If-None-Match, unread. */
+    private readonly listedPaths;
+    private readonly listedPrefixes;
     private readonly conns;
     private state;
     private paused;
@@ -138,8 +147,14 @@ export declare class SyncEngine {
     private readShard;
     private push;
     private encodeOp;
-    /** Merge ops into one shard and write it; retried on a 412. */
+    /** Merge ops into one shard and write it; retried on a 412. The first
+     *  try starts from the cached copy, or from nothing when the last
+     *  listing showed no such shard — no read either way. */
     private writeShard;
+    private cacheShard;
+    private knownAbsent;
+    /** Remember what a listing of `prefix` showed (see listedPaths). */
+    private rememberListing;
     private storeBlob;
     private pull;
     private pullDatabase;
