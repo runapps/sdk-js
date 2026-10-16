@@ -168,6 +168,7 @@ export type {
   FileObject,
   FileListResult,
   PutOptions as FilePutOptions,
+  SignOptions as FileSignOptions,
   ListOptions as FileListOptions,
   PutFromURLOptions as FilePutFromURLOptions,
   BatchOp as FileBatchOp,

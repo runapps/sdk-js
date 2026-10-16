@@ -279,6 +279,12 @@ await client.files.putFromURL("cache/cat.jpg", "https://example.com/cat.jpg"); /
 
 // Read.
 const blob = await client.files.get("assets/logo.png");
+
+// A time-limited link that needs no token — for <img src>, <video src>, downloads.
+// One hour by default, up to seven days; never cached, always the current bytes.
+const src = await client.files.url("assets/logo.png");                 // https://files.runapps.ai/f/…/logo.png
+const dl  = await client.files.url("export.csv", { expiresIn: 86400, download: true });
+const many = await client.files.urls(["a.png", "b.png"]);              // { "a.png": "…", "b.png": "…" }
 const meta = await client.files.stat("assets/logo.png");   // size, etag, last_modified, url
 await client.files.exists("assets/logo.png");
 

@@ -232,6 +232,33 @@ export class FilesService {
         return this.run("files.copy", async () => this.transport.postJSON((await this.base()) + "/copy", { from, to }, init));
     }
     /**
+     * A time-limited link to a private file that needs no token: put it in
+     * `<img src>`, `<video src>` or `<a href download>`. The link is for
+     * this user's copy of the file in this app; it expires after
+     * `expiresIn` seconds (default one hour, at most seven days) and is
+     * never cached, so it always shows the current bytes. For a permanent
+     * public address use the FileObject's `url` instead.
+     */
+    async url(path, opts) {
+        const urls = await this.urls([path], opts);
+        const u = urls[path];
+        if (!u)
+            throw new Error("RunApps: no signed URL returned for " + path);
+        return u;
+    }
+    /** Signed links for several paths at once (up to 200): `{ path: url }`. */
+    async urls(paths, opts) {
+        const body = { paths };
+        if (opts?.expiresIn)
+            body.expires_in = Math.floor(opts.expiresIn);
+        const r = await this.run("files.sign", async () => this.transport.postJSON((await this.base()) + "/sign", body, opts?.signal ? { signal: opts.signal } : undefined));
+        const out = {};
+        for (const [p, u] of Object.entries(r.urls || {})) {
+            out[p] = opts?.download ? u + (u.includes("?") ? "&" : "?") + "download=1" : u;
+        }
+        return out;
+    }
+    /**
      * Ask the gateway to fetch `srcURL` and store the body at `path`.
      * Saves a round trip vs downloading then re-uploading.  `srcURL`
      * must be a public http(s) URL (private/loopback hosts rejected).

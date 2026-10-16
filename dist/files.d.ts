@@ -33,6 +33,13 @@ export interface FileRead {
     /** Pass back as `ifMatch` to write only if nobody else has since. */
     etag?: string;
 }
+export interface SignOptions {
+    /** How long the link stays valid, in seconds. Default 3600, at most 7 days. */
+    expiresIn?: number;
+    /** When true the link downloads instead of displaying inline. */
+    download?: boolean;
+    signal?: AbortSignal;
+}
 export interface ListOptions {
     prefix?: string;
     cursor?: string;
@@ -228,6 +235,17 @@ export declare class FilesService {
     copy(from: string, to: string, init?: {
         signal?: AbortSignal;
     }): Promise<FileObject>;
+    /**
+     * A time-limited link to a private file that needs no token: put it in
+     * `<img src>`, `<video src>` or `<a href download>`. The link is for
+     * this user's copy of the file in this app; it expires after
+     * `expiresIn` seconds (default one hour, at most seven days) and is
+     * never cached, so it always shows the current bytes. For a permanent
+     * public address use the FileObject's `url` instead.
+     */
+    url(path: string, opts?: SignOptions): Promise<string>;
+    /** Signed links for several paths at once (up to 200): `{ path: url }`. */
+    urls(paths: string[], opts?: SignOptions): Promise<Record<string, string>>;
     /**
      * Ask the gateway to fetch `srcURL` and store the body at `path`.
      * Saves a round trip vs downloading then re-uploading.  `srcURL`

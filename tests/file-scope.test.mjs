@@ -157,3 +157,25 @@ test("two projects never produce the same file URL", async () => {
 
   assert.notEqual(a[0].url, b[0].url);
 });
+
+test("files.url asks …/files/sign and returns the link", async () => {
+  const calls = [];
+  const client = new RunJobs({
+    apiKey: "gw-test",
+    baseURL: "https://example.test",
+    project: "videomaker",
+    fetch: async (url, init) => {
+      if (String(url).endsWith("/v1/files-base")) return new Response("{}", { status: 404 });
+      calls.push({ url, init });
+      return new Response(JSON.stringify({ urls: { "a/b.png": "https://files.example.test/f/TOKEN/b.png" }, expires_at: "2030-01-01T00:00:00Z" }), {
+        status: 200, headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  const u = await client.files.url("a/b.png", { expiresIn: 600, download: true });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "https://example.test/v1/p/videomaker/files/sign");
+  assert.equal(calls[0].init.method, "POST");
+  assert.deepEqual(JSON.parse(calls[0].init.body), { paths: ["a/b.png"], expires_in: 600 });
+  assert.equal(u, "https://files.example.test/f/TOKEN/b.png?download=1");
+});

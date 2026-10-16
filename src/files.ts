@@ -48,6 +48,14 @@ export interface FileRead {
   etag?: string;
 }
 
+export interface SignOptions {
+  /** How long the link stays valid, in seconds. Default 3600, at most 7 days. */
+  expiresIn?: number;
+  /** When true the link downloads instead of displaying inline. */
+  download?: boolean;
+  signal?: AbortSignal;
+}
+
 export interface ListOptions {
   prefix?: string;
   cursor?: string;
@@ -341,6 +349,37 @@ export class FilesService {
   /** Server-side copy. */
   async copy(from: string, to: string, init?: { signal?: AbortSignal }): Promise<FileObject> {
     return this.run("files.copy", async () => this.transport.postJSON<FileObject>((await this.base()) + "/copy", { from, to }, init));
+  }
+
+  /**
+   * A time-limited link to a private file that needs no token: put it in
+   * `<img src>`, `<video src>` or `<a href download>`. The link is for
+   * this user's copy of the file in this app; it expires after
+   * `expiresIn` seconds (default one hour, at most seven days) and is
+   * never cached, so it always shows the current bytes. For a permanent
+   * public address use the FileObject's `url` instead.
+   */
+  async url(path: string, opts?: SignOptions): Promise<string> {
+    const urls = await this.urls([path], opts);
+    const u = urls[path];
+    if (!u) throw new Error("RunApps: no signed URL returned for " + path);
+    return u;
+  }
+
+  /** Signed links for several paths at once (up to 200): `{ path: url }`. */
+  async urls(paths: string[], opts?: SignOptions): Promise<Record<string, string>> {
+    const body: { paths: string[]; expires_in?: number } = { paths };
+    if (opts?.expiresIn) body.expires_in = Math.floor(opts.expiresIn);
+    const r = await this.run("files.sign", async () => this.transport.postJSON<{ urls: Record<string, string> }>(
+      (await this.base()) + "/sign",
+      body,
+      opts?.signal ? { signal: opts.signal } : undefined,
+    ));
+    const out: Record<string, string> = {};
+    for (const [p, u] of Object.entries(r.urls || {})) {
+      out[p] = opts?.download ? u + (u.includes("?") ? "&" : "?") + "download=1" : u;
+    }
+    return out;
   }
 
   /**
