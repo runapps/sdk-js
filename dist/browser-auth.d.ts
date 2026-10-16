@@ -153,6 +153,9 @@ export declare class BrowserAuth {
     private grantUrlForThisPage;
     /** Popup grant flow. One popup at a time; concurrent callers share it. */
     private signInPopup;
+    /** Resolves on the next click, tap or key press anywhere in the page. */
+    private waitForUserGesture;
+    private waitForPopupToken;
     /** Inside the popup, after the token landed: close, or say so. */
     private finishPopup;
     /**

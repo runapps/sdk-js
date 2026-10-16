@@ -171,7 +171,10 @@ export class BrowserAuth {
         // user to click signIn.  Without this guard, the backend's
         // auto-grant flow would re-issue a token on every page reload
         // (the cookie on the gateway domain is still valid).
-        if (this.isSignedOut()) {
+        // In popup mode a signed-out user is simply asked to sign in again:
+        // the popup only ever opens on the user's own action, so there is no
+        // page to lose and no reason to refuse the call.
+        if (this.isSignedOut() && !(this.signInMode === "popup" && !this.inIframe())) {
             throw new Error("RunApps: signed out — call client.signIn() to authenticate");
         }
         // ── Embedded (cross-site iframe) path ──
@@ -354,16 +357,48 @@ export class BrowserAuth {
             return this.popupWait;
         this.clearSignedOut();
         const key = storageKey(this.project);
-        const win = window.open(this.grantUrlForThisPage(true), POPUP_NAME, "popup=yes,width=520,height=700");
+        const open = () => window.open(this.grantUrlForThisPage(true), POPUP_NAME, "popup=yes,width=520,height=700");
+        let win = open();
         if (!win) {
-            // Popup blocked: the redirect is the only way left.
-            this.signingIn = true;
-            location.href = this.grantUrlForThisPage();
-            return new Promise(() => { });
-        }
-        this.popupOpenedAt = now;
-        if (this.popupWait)
+            // Blocked — usually because no user gesture is active (a call made
+            // at load, or after a long await). Open it on the user's next click
+            // or key press instead; only a popup blocked on a real gesture falls
+            // back to the redirect.
+            if (this.popupWait)
+                return this.popupWait;
+            this.popupWait = this.waitForUserGesture().then(() => {
+                this.popupWait = null;
+                win = open();
+                if (!win) {
+                    this.signingIn = true;
+                    location.href = this.grantUrlForThisPage();
+                    return new Promise(() => { });
+                }
+                return this.waitForPopupToken(key, Date.now());
+            });
             return this.popupWait;
+        }
+        if (this.popupWait) {
+            this.popupOpenedAt = now;
+            return this.popupWait;
+        }
+        return this.waitForPopupToken(key, now);
+    }
+    /** Resolves on the next click, tap or key press anywhere in the page. */
+    waitForUserGesture() {
+        return new Promise((resolve) => {
+            const types = ["pointerdown", "keydown", "touchend"];
+            const handler = () => {
+                for (const t of types)
+                    window.removeEventListener(t, handler, true);
+                resolve();
+            };
+            for (const t of types)
+                window.addEventListener(t, handler, true);
+        });
+    }
+    waitForPopupToken(key, openedAt) {
+        this.popupOpenedAt = openedAt;
         // Under COOP the popup's handle is cut off as soon as it leaves this
         // origin (`win.closed` reads true), so a closed popup cannot be told
         // from one still signing in: the promise stays pending until a token
