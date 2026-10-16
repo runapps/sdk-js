@@ -89,6 +89,13 @@ export interface ClientOptions {
      * pair.
      */
     project?: string;
+    /**
+     * Where file calls go. By default the SDK asks the gateway for a
+     * per-user base on the files host (`https://files.runapps.ai/u/<hash>`)
+     * and falls back to the classic `/v1/files` paths on older gateways.
+     * `false` keeps the classic paths; a URL overrides the base.
+     */
+    filesBase?: string | false;
     /** Override the default base URL, `https://www.runapps.ai` (the
      *  platform: personal keys and app tokens are both accepted there). */
     baseURL?: string;

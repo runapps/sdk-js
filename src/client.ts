@@ -99,6 +99,13 @@ export interface ClientOptions {
    * pair.
    */
   project?: string;
+  /**
+   * Where file calls go. By default the SDK asks the gateway for a
+   * per-user base on the files host (`https://files.runapps.ai/u/<hash>`)
+   * and falls back to the classic `/v1/files` paths on older gateways.
+   * `false` keeps the classic paths; a URL overrides the base.
+   */
+  filesBase?: string | false;
   /** Override the default base URL, `https://www.runapps.ai` (the
    *  platform: personal keys and app tokens are both accepted there). */
   baseURL?: string;
@@ -260,7 +267,7 @@ export class RunApps {
     // `project` also scopes the file URLs (/v1/p/<project>/files/...),
     // so two apps never issue byte-identical file requests.  Omitted →
     // legacy unscoped /v1/files/... paths.
-    this.files = new FilesService(transport, options.project, this.events);
+    this.files = new FilesService(transport, options.project, this.events, options.filesBase);
     this.embeddings = new EmbeddingsService(transport, this.events);
     this.realtime = new RealtimeService(transport, this.events);
 
@@ -274,7 +281,7 @@ export class RunApps {
         {
           // Its own file service, without the event bus: sync traffic
           // must not spin the badge every minute.
-          remote: new FilesRemote(new FilesService(transport, options.project)),
+          remote: new FilesRemote(new FilesService(transport, options.project, undefined, options.filesBase)),
           events: this.events,
           userId: () => auth.ownerId(),
           onAuthChange: (cb) => auth.onTokenChange(() => cb()),

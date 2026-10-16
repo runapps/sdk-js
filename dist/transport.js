@@ -21,6 +21,23 @@ export class Transport {
         // for any binding their wrapper needs.
         this.fetchImpl = opts.fetchImpl ?? fetch.bind(globalThis);
     }
+    /** Absolute URLs pass through; paths are joined to the base. The files
+     *  service uses this to send file calls to the files host. */
+    resolve(path) {
+        return /^https?:\/\//i.test(path) ? path : this.baseURL + path;
+    }
+    /** A short, non-secret fingerprint of the current token, so a service
+     *  can notice that the signed-in user changed and drop per-user state
+     *  (the files base is derived from the user). */
+    async tokenFingerprint() {
+        const t = await this.resolveToken();
+        if (!t)
+            return "";
+        let h = 0;
+        for (let i = 0; i < t.length; i++)
+            h = (h * 31 + t.charCodeAt(i)) | 0;
+        return (h >>> 0).toString(36) + ":" + t.length;
+    }
     /** Resolve the bearer token for the next request. */
     async resolveToken() {
         if (this.apiKeyResolver)
@@ -40,7 +57,7 @@ export class Transport {
      * `onUnauthorized` is absent or already retried.
      */
     async fetchWithAuthRetry(path, build) {
-        const url = this.baseURL + path;
+        const url = this.resolve(path);
         let resp = await this.fetchImpl(url, await this.buildInit(build));
         if (resp.status !== 401 || !this.onUnauthorized)
             return resp;
@@ -100,7 +117,7 @@ export class Transport {
      *  token — in browser sign-in mode that would send a signed-out user to
      *  the sign-in page just to read the model catalogue. */
     async getPublicJSON(path, init) {
-        const resp = await this.fetchImpl(this.baseURL + path, {
+        const resp = await this.fetchImpl(this.resolve(path), {
             method: "GET",
             cache: "no-store",
             ...(init?.signal ? { signal: init.signal } : {}),

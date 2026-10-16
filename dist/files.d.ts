@@ -117,12 +117,32 @@ export declare class FilesService {
      * rejects a scope that disagrees with it, so this is a correctness
      * measure, not a permission one.
      */
-    private readonly base;
+    private readonly legacyBase;
+    private readonly project;
+    private readonly filesBase;
+    private baseCache;
+    private basePending;
     constructor(transport: Transport, project?: string, 
     /** When given, every call emits request:start / end / error so the
      *  badge can show it in flight; the sync engine's own file traffic
      *  uses a service without one. */
-    events?: SDKEvents | undefined);
+    events?: SDKEvents | undefined, 
+    /** `false`: stay on the classic /v1 paths; a string: use this as the
+     *  per-user base instead of asking the gateway. */
+    filesBase?: string | false);
+    /**
+     * The URL prefix for file calls, resolved once per signed-in user.
+     *
+     * Newer gateways answer `GET /v1/files-base` with a per-user base on
+     * the files host — `https://files.runapps.ai/u/<hash>` — so every
+     * file URL is unique to its user as well as to its app, and file
+     * traffic leaves the main site. The `/files` or `/p/<app>/files` tail
+     * is appended here. A gateway without that endpoint, or a failure to
+     * reach it, falls back to the classic path on the main base. The
+     * result is cached against a fingerprint of the token: a different
+     * user signing in gets their own base.
+     */
+    private base;
     /** Run one file call, with badge events when the service has a bus. */
     private run;
     /**

@@ -149,7 +149,7 @@ export class RunApps {
         // `project` also scopes the file URLs (/v1/p/<project>/files/...),
         // so two apps never issue byte-identical file requests.  Omitted →
         // legacy unscoped /v1/files/... paths.
-        this.files = new FilesService(transport, options.project, this.events);
+        this.files = new FilesService(transport, options.project, this.events, options.filesBase);
         this.embeddings = new EmbeddingsService(transport, this.events);
         this.realtime = new RealtimeService(transport, this.events);
         // Sync: an app on RunApps gets it unless it says no. It
@@ -161,7 +161,7 @@ export class RunApps {
             const engine = new SyncEngine({
                 // Its own file service, without the event bus: sync traffic
                 // must not spin the badge every minute.
-                remote: new FilesRemote(new FilesService(transport, options.project)),
+                remote: new FilesRemote(new FilesService(transport, options.project, undefined, options.filesBase)),
                 events: this.events,
                 userId: () => auth.ownerId(),
                 onAuthChange: (cb) => auth.onTokenChange(() => cb()),

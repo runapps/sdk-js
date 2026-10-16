@@ -19,9 +19,12 @@ import assert from "node:assert/strict";
 
 import { RunJobs } from "../dist/index.js";
 
-/** Records (url, init) for each call and answers with an empty JSON body. */
+/** Records (url, init) for each call and answers with an empty JSON body.
+ *  The files-base probe is answered like an older gateway (404) and not
+ *  recorded, so these tests exercise the classic paths. */
 function recordingFetch(calls) {
   return async (url, init) => {
+    if (String(url).endsWith("/v1/files-base")) return new Response("{}", { status: 404 });
     calls.push({ url, init });
     return new Response("{}", {
       status: 200,
@@ -29,6 +32,49 @@ function recordingFetch(calls) {
     });
   };
 }
+
+test("file calls move to the per-user base the gateway names", async () => {
+  const calls = [];
+  let probes = 0;
+  const client = new RunJobs({
+    apiKey: "gw-test",
+    baseURL: "https://example.test",
+    project: "videomaker",
+    fetch: async (url, init) => {
+      if (String(url).endsWith("/v1/files-base")) {
+        probes++;
+        return new Response(JSON.stringify({ base: "https://files.example.test/u/abc123def456" }), {
+          status: 200, headers: { "content-type": "application/json" },
+        });
+      }
+      calls.push({ url, init });
+      return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+    },
+  });
+  await client.files.list();
+  await client.files.putString("projects/index.json", "{}");
+  assert.equal(probes, 1, "the base is asked for once per user");
+  assert.equal(calls[0].url, "https://files.example.test/u/abc123def456/p/videomaker/files");
+  assert.equal(calls[1].url, "https://files.example.test/u/abc123def456/p/videomaker/files/projects/index.json");
+  for (const { init } of calls) assert.equal(init.cache, "no-store");
+});
+
+test("filesBase: false keeps the classic paths", async () => {
+  const calls = [];
+  const client = new RunJobs({
+    apiKey: "gw-test",
+    baseURL: "https://example.test",
+    project: "videomaker",
+    filesBase: false,
+    fetch: async (url, init) => {
+      calls.push({ url, init });
+      return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+    },
+  });
+  await client.files.list();
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "https://example.test/v1/p/videomaker/files");
+});
 
 test("file requests are issued with cache: no-store", async () => {
   const calls = [];

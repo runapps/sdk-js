@@ -269,6 +269,8 @@ The tokens of every round and each tool call are billed together, and `usage.tot
 
 Each app has a file space for each signed-in user. Paths look like POSIX paths, and every file has a public `url` you can use in `<img src>`.
 
+File calls go to the files host, `https://files.runapps.ai/u/<hash>/…`, where `<hash>` stands for the signed-in user (the SDK asks the gateway for it once per sign-in). Every file URL is therefore unique to its user and its app, and file traffic stays off the main site. Responses are never cached, since files change. Pass `filesBase: false` to keep the classic `/v1/files` paths on the main base, or a URL to use another base.
+
 ```ts
 // Write. body: Blob | File | ArrayBuffer | Uint8Array | ReadableStream | string
 const obj = await client.files.put("assets/logo.png", pngBlob, { contentType: "image/png" });

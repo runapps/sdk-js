@@ -40,6 +40,13 @@ export declare class Transport {
     private readonly onUnauthorized;
     private readonly fetchImpl;
     constructor(opts: TransportOptions);
+    /** Absolute URLs pass through; paths are joined to the base. The files
+     *  service uses this to send file calls to the files host. */
+    private resolve;
+    /** A short, non-secret fingerprint of the current token, so a service
+     *  can notice that the signed-in user changed and drop per-user state
+     *  (the files base is derived from the user). */
+    tokenFingerprint(): Promise<string>;
     /** Resolve the bearer token for the next request. */
     private resolveToken;
     /** The current bearer token, for connections fetch can't make (WebSocket). */

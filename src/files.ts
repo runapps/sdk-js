@@ -118,7 +118,11 @@ export class FilesService {
    * rejects a scope that disagrees with it, so this is a correctness
    * measure, not a permission one.
    */
-  private readonly base: string;
+  private readonly legacyBase: string;
+  private readonly project: string | undefined;
+  private readonly filesBase: string | false | undefined;
+  private baseCache: { fp: string; base: string } | null = null;
+  private basePending: Promise<string> | null = null;
 
   constructor(
     private readonly transport: Transport,
@@ -127,10 +131,49 @@ export class FilesService {
      *  badge can show it in flight; the sync engine's own file traffic
      *  uses a service without one. */
     private readonly events?: SDKEvents,
+    /** `false`: stay on the classic /v1 paths; a string: use this as the
+     *  per-user base instead of asking the gateway. */
+    filesBase?: string | false,
   ) {
-    this.base = project
+    this.project = project;
+    this.filesBase = filesBase;
+    this.legacyBase = project
       ? "/v1/p/" + encodeURIComponent(project) + "/files"
       : "/v1/files";
+  }
+
+  /**
+   * The URL prefix for file calls, resolved once per signed-in user.
+   *
+   * Newer gateways answer `GET /v1/files-base` with a per-user base on
+   * the files host — `https://files.runapps.ai/u/<hash>` — so every
+   * file URL is unique to its user as well as to its app, and file
+   * traffic leaves the main site. The `/files` or `/p/<app>/files` tail
+   * is appended here. A gateway without that endpoint, or a failure to
+   * reach it, falls back to the classic path on the main base. The
+   * result is cached against a fingerprint of the token: a different
+   * user signing in gets their own base.
+   */
+  private async base(): Promise<string> {
+    if (this.filesBase === false) return this.legacyBase;
+    const tail = this.project ? "/p/" + encodeURIComponent(this.project) + "/files" : "/files";
+    if (typeof this.filesBase === "string") return this.filesBase.replace(/\/+$/, "") + tail;
+    const fp = await this.transport.tokenFingerprint();
+    if (this.baseCache && this.baseCache.fp === fp) return this.baseCache.base;
+    if (!this.basePending) {
+      this.basePending = (async () => {
+        let base = this.legacyBase;
+        try {
+          const r = await this.transport.getJSON<{ base?: string }>("/v1/files-base");
+          if (r && typeof r.base === "string" && /^https?:\/\//i.test(r.base)) base = r.base.replace(/\/+$/, "") + tail;
+        } catch {
+          // Older gateway or a transient failure: the classic path still works.
+        }
+        this.baseCache = { fp, base };
+        return base;
+      })().finally(() => { this.basePending = null; });
+    }
+    return this.basePending;
   }
 
   /** Run one file call, with badge events when the service has a bus. */
@@ -154,7 +197,7 @@ export class FilesService {
     const headers: Record<string, string> = {};
     if (opts?.ifNoneMatch) headers["If-None-Match"] = "*";
     if (opts?.ifMatch) headers["If-Match"] = `"${cleanETag(opts.ifMatch)}"`;
-    return this.run("files.put", () => this.transport.putBytes<FileObject>(pathToURL(this.base, path), body, {
+    return this.run("files.put", async () => this.transport.putBytes<FileObject>(pathToURL(await this.base(), path), body, {
       contentType: opts?.contentType,
       headers: Object.keys(headers).length ? headers : undefined,
       signal: opts?.signal,
@@ -193,7 +236,7 @@ export class FilesService {
   }
 
   private async readRaw(path: string, init?: { signal?: AbortSignal; ifNoneMatch?: string }): Promise<FileRead> {
-    const { data, contentType, etag, notModified } = await this.transport.getRaw(pathToURL(this.base, path), init);
+    const { data, contentType, etag, notModified } = await this.transport.getRaw(pathToURL(await this.base(), path), init);
     return {
       blob: new Blob([new Uint8Array(data)], { type: contentType || "application/octet-stream" }),
       contentType,
@@ -227,7 +270,7 @@ export class FilesService {
 
   /** Stat: HEAD-only object metadata. */
   async stat(path: string, init?: { signal?: AbortSignal }): Promise<FileObject> {
-    const { status, headers } = await this.run("files.stat", () => this.transport.head(pathToURL(this.base, path), init));
+    const { status, headers } = await this.run("files.stat", async () => this.transport.head(pathToURL(await this.base(), path), init));
     if (status === 404) {
       throw Object.assign(new Error("not found"), { status: 404 });
     }
@@ -246,13 +289,13 @@ export class FilesService {
 
   /** Returns true iff the path resolves to an existing object. */
   async exists(path: string, init?: { signal?: AbortSignal }): Promise<boolean> {
-    const { status } = await this.run("files.exists", () => this.transport.head(pathToURL(this.base, path), init));
+    const { status } = await this.run("files.exists", async () => this.transport.head(pathToURL(await this.base(), path), init));
     return status >= 200 && status < 400;
   }
 
   /** Delete the object at `path`.  Idempotent. */
   async del(path: string, init?: { signal?: AbortSignal }): Promise<void> {
-    await this.run("files.del", () => this.transport.deletePath<{ ok: boolean }>(pathToURL(this.base, path), init));
+    await this.run("files.del", async () => this.transport.deletePath<{ ok: boolean }>(pathToURL(await this.base(), path), init));
   }
 
   /** List objects.  Pass an empty / omitted prefix for the root. */
@@ -263,8 +306,8 @@ export class FilesService {
     if (opts?.limit) params.set("limit", String(opts.limit));
     if (opts?.glob) params.set("glob", opts.glob);
     const qs = params.toString();
-    return this.run("files.list", () => this.transport.getJSON<FileListResult>(
-      this.base + (qs ? "?" + qs : ""),
+    return this.run("files.list", async () => this.transport.getJSON<FileListResult>(
+      (await this.base()) + (qs ? "?" + qs : ""),
       opts?.signal ? { signal: opts.signal } : undefined,
     ));
   }
@@ -283,8 +326,8 @@ export class FilesService {
     opts: { prefix?: string; glob?: string },
     init?: { signal?: AbortSignal },
   ): Promise<{ deleted: number }> {
-    return this.run("files.deleteMany", () => this.transport.postJSON<{ deleted: number }>(
-      this.base + "/delete",
+    return this.run("files.deleteMany", async () => this.transport.postJSON<{ deleted: number }>(
+      (await this.base()) + "/delete",
       { prefix: opts.prefix ?? "", glob: opts.glob ?? "" },
       init,
     ));
@@ -292,12 +335,12 @@ export class FilesService {
 
   /** Atomic rename (copy + delete server-side). */
   async move(from: string, to: string, init?: { signal?: AbortSignal }): Promise<FileObject> {
-    return this.run("files.move", () => this.transport.postJSON<FileObject>(this.base + "/move", { from, to }, init));
+    return this.run("files.move", async () => this.transport.postJSON<FileObject>((await this.base()) + "/move", { from, to }, init));
   }
 
   /** Server-side copy. */
   async copy(from: string, to: string, init?: { signal?: AbortSignal }): Promise<FileObject> {
-    return this.run("files.copy", () => this.transport.postJSON<FileObject>(this.base + "/copy", { from, to }, init));
+    return this.run("files.copy", async () => this.transport.postJSON<FileObject>((await this.base()) + "/copy", { from, to }, init));
   }
 
   /**
@@ -310,8 +353,8 @@ export class FilesService {
     srcURL: string,
     opts?: PutFromURLOptions,
   ): Promise<FileObject> {
-    return this.run("files.putFromURL", () => this.transport.postJSON<FileObject>(
-      this.base + "/put-url",
+    return this.run("files.putFromURL", async () => this.transport.postJSON<FileObject>(
+      (await this.base()) + "/put-url",
       {
         path,
         src_url: srcURL,
@@ -347,7 +390,7 @@ export class FilesService {
     const chunkSize = 30;
     if (ops.length <= chunkSize) {
       const resp = await this.transport.postJSON<{ results: BatchResult[] }>(
-        this.base + "/batch",
+        (await this.base()) + "/batch",
         { ops },
         init,
       );
@@ -357,7 +400,7 @@ export class FilesService {
     for (let i = 0; i < ops.length; i += chunkSize) {
       const chunk = ops.slice(i, i + chunkSize);
       const resp = await this.transport.postJSON<{ results: BatchResult[] }>(
-        this.base + "/batch",
+        (await this.base()) + "/batch",
         { ops: chunk },
         init,
       );
