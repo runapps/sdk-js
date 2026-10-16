@@ -78,9 +78,11 @@ await client.signIn();               // resolves once the user has signed in; re
 ```
 
 The popup lands back on your origin with the token and closes itself; the
-page keeps everything it had and the pending call goes through. Call it from
-a click handler so the browser allows the popup; a blocked popup falls back
-to the redirect.
+page keeps everything it had and the pending call goes through. After
+`signOut()` the next call that needs a token opens the popup again instead of
+throwing. Call it from a click handler so the browser allows the popup; a
+popup blocked for lack of a user gesture opens on the user's next click or
+key press, and one blocked on a real gesture falls back to the redirect.
 
 The SDK holds one token per user per app. It draws a small activity badge while it works; turn it off with `showIdentityBadge: false`, or move it with `badgePosition`.
 
