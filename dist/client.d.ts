@@ -51,6 +51,14 @@ export interface ClientOptions {
      */
     showIdentityBadge?: boolean;
     /**
+     * How the browser auth flow obtains a token when there is none:
+     * `"redirect"` (default) navigates the page away and back, losing
+     * unsaved state; `"popup"` signs in through a popup window and
+     * resumes the pending call, so the page keeps its state. See
+     * `BrowserAuthOptions.signInMode`.
+     */
+    signInMode?: "redirect" | "popup";
+    /**
      * Which corner the identity badge floats in. Defaults to
      * `"bottom-right"` — the canonical tray-app position. Switch to
      * `"bottom-left"` when the bundle's own UI occupies the right
@@ -168,7 +176,7 @@ export declare class RunApps {
     constructor(options?: ClientOptions);
     /** Force a redirect to the runapps.ai grant page.  No-op in static
      *  auth mode or in Node. */
-    signIn(): void;
+    signIn(): Promise<void> | void;
     /**
      * Clear the cached token + identity from memory and localStorage.
      * The next API call will trigger sign-in again (redirect to grant

@@ -113,6 +113,7 @@ export class RunApps {
                 events: this.events,
                 ...(options.badgePosition !== undefined && { badgePosition: options.badgePosition }),
                 ...(options.project !== undefined && { project: options.project }),
+                ...(options.signInMode !== undefined && { signInMode: options.signInMode }),
             });
             this.auth = auth;
             // The browser auth resolver wins over any caller-supplied one
@@ -171,7 +172,7 @@ export class RunApps {
     /** Force a redirect to the runapps.ai grant page.  No-op in static
      *  auth mode or in Node. */
     signIn() {
-        this.auth?.signIn();
+        return this.auth?.signIn();
     }
     /**
      * Clear the cached token + identity from memory and localStorage.

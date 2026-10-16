@@ -68,6 +68,20 @@ client.auth?.onTokenChange(t => {}); // react to sign-in
 client.auth?.hasFreshToken();        // avoid showing a "sign in" button needlessly
 ```
 
+By default the first call that needs a token navigates the page to the sign-in
+flow and back, which discards unsaved state in the page. An editor-style app
+should ask for a popup instead:
+
+```ts
+const client = new RunApps({ signInMode: "popup" });
+await client.signIn();               // resolves once the user has signed in; rejects if they close the popup
+```
+
+The popup lands back on your origin with the token and closes itself; the
+page keeps everything it had and the pending call goes through. Call it from
+a click handler so the browser allows the popup; a blocked popup falls back
+to the redirect.
+
 The SDK holds one token per user per app. It draws a small activity badge while it works; turn it off with `showIdentityBadge: false`, or move it with `badgePosition`.
 
 `project` is optional on `*.runapps.dev`, where the address already says which app it is. It is required on localhost and when the client runs on a personal key. Sign-in only works on the app's own `*.runapps.dev` address and on `http://localhost`. With no key, a browser client signs the user in on its own; outside a browser there is no one to sign in, so pass `apiKey`.

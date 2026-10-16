@@ -38,6 +38,8 @@ const TOKEN_REFRESH_MARGIN_S = 60;
 // unsuffixed key, which preserves back-compat for already-persisted
 // tokens after upgrade.
 const STORAGE_KEY_BASE = "__runapps_auth_v1__";
+/** window.name of the sign-in popup; the page loaded in it closes itself. */
+const POPUP_NAME = "runapps-signin";
 // Written by SDK 0.3 and earlier; read once and migrated, so an upgrade
 // keeps the user signed in.
 const LEGACY_STORAGE_KEY_BASE = "__runjobs_auth_v1__";
@@ -89,6 +91,8 @@ export class BrowserAuth {
     badgePosition;
     token = null;
     expiresAt = 0;
+    signInMode;
+    popupWait = null;
     userInfo = null;
     listeners = [];
     parentHandshake = null;
@@ -99,6 +103,7 @@ export class BrowserAuth {
         this.project = opts.project ?? null;
         this.events = opts.events ?? null;
         this.badgePosition = opts.badgePosition ?? "bottom-right";
+        this.signInMode = opts.signInMode ?? "redirect";
         if (this.events && !this.hideBadge) {
             this.tracker = new ActivityTracker();
             this.tracker.attach(this.events);
@@ -121,6 +126,12 @@ export class BrowserAuth {
         // sticky flag — the user explicitly signed in again.
         if (this.consumeFragment()) {
             this.clearSignedOut();
+            if (window.name === POPUP_NAME) {
+                // We are the sign-in popup: the token is in localStorage, which
+                // the opener (same origin) sees through its `storage` event.
+                this.finishPopup();
+                return;
+            }
         }
         if (this.isSignedOut()) {
             // Honour the user's explicit sign-out across reloads.  Don't
@@ -198,6 +209,12 @@ export class BrowserAuth {
         // No fresh token + can't get one silently → redirect to grant.
         // The page is about to unload; return a never-resolving Promise so
         // the caller doesn't proceed with a half-issued request.
+        if (this.signInMode === "popup") {
+            await this.signInPopup();
+            if (this.tokenIsFresh())
+                return this.token;
+            throw new Error("RunApps: sign-in did not complete");
+        }
         this.signIn();
         return new Promise(() => { });
     };
@@ -277,25 +294,103 @@ export class BrowserAuth {
         this.signingIn = false;
         this.clearPersisted();
     }
-    /** Force a redirect to the grant page. */
+    /** Start the grant flow: a redirect (default) or, in popup mode, a
+     *  popup window — then the returned promise resolves once the token
+     *  has arrived (and rejects if the popup is closed first). */
     signIn() {
-        if (typeof window === "undefined" || this.signingIn)
+        if (typeof window === "undefined")
+            return;
+        if (this.signInMode === "popup")
+            return this.signInPopup();
+        if (this.signingIn)
             return;
         // Explicit signIn clears the "signed out" flag so getToken() can
         // proceed with the redirect-grant flow.
         this.clearSignedOut();
         this.signingIn = true;
+        location.href = this.grantUrlForThisPage();
+    }
+    grantUrlForThisPage() {
         const ret = location.href.split("#")[0] ?? location.href;
         const scheme = window.matchMedia?.("(prefers-color-scheme: dark)")
             .matches
             ? "dark"
             : "light";
-        location.href = this.buildGrantUrl({
+        return this.buildGrantUrl({
             pageOrigin: location.origin,
             app: location.host,
             redirectTo: ret,
             scheme,
         });
+    }
+    /** Popup grant flow. One popup at a time; concurrent callers share it. */
+    signInPopup() {
+        if (this.popupWait)
+            return this.popupWait;
+        this.clearSignedOut();
+        const key = storageKey(this.project);
+        const win = window.open(this.grantUrlForThisPage(), POPUP_NAME, "popup=yes,width=520,height=700");
+        if (!win) {
+            // Popup blocked: the redirect is the only way left.
+            this.signingIn = true;
+            location.href = this.grantUrlForThisPage();
+            return new Promise(() => { });
+        }
+        this.popupWait = new Promise((resolve, reject) => {
+            let timer = 0;
+            const done = (err) => {
+                window.removeEventListener("storage", onStorage);
+                window.clearInterval(timer);
+                this.popupWait = null;
+                if (err)
+                    reject(err);
+                else
+                    resolve();
+            };
+            const adopt = () => {
+                const before = this.token;
+                this.loadPersisted();
+                if (!this.tokenIsFresh())
+                    return false;
+                if (this.token !== before)
+                    this.setToken(this.token, this.expiresAt, this.userInfo ?? undefined);
+                else if (this.userInfo && !this.hideBadge)
+                    this.renderBadge();
+                try {
+                    win.close();
+                }
+                catch { /* already gone */ }
+                done();
+                return true;
+            };
+            const onStorage = (e) => {
+                if (e.key === key && e.newValue)
+                    adopt();
+            };
+            window.addEventListener("storage", onStorage);
+            timer = window.setInterval(() => {
+                if (adopt())
+                    return;
+                if (win.closed)
+                    done(new Error("RunApps: sign-in was cancelled"));
+            }, 500);
+        });
+        return this.popupWait;
+    }
+    /** Inside the popup, after the token landed: close, or say so. */
+    finishPopup() {
+        try {
+            window.close();
+        }
+        catch { /* not script-closable */ }
+        window.setTimeout(() => {
+            if (window.closed)
+                return;
+            document.documentElement.innerHTML =
+                '<head><meta charset="utf-8"><title>Signed in</title></head>' +
+                    '<body style="margin:0;display:flex;align-items:center;justify-content:center;height:100vh;font:15px/1.5 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;color:#333;background:#fafafa">' +
+                    "<p>Signed in. You can close this window and go back to the app.</p></body>";
+        }, 400);
     }
     /**
      * Build the `/api/sdk/grant?…` URL the user is redirected to.  Split

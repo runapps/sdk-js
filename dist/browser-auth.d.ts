@@ -16,6 +16,16 @@ export interface BrowserAuthOptions {
      */
     hideBadge?: boolean;
     /**
+     * How a missing token is obtained. `"redirect"` (default) navigates
+     * the page to the grant flow and back, which discards unsaved work in
+     * the page. `"popup"` opens the grant flow in a popup window and waits:
+     * the popup lands back on this origin with the token, which it stores,
+     * and this page picks it up through the `storage` event — so it works
+     * under COOP, where popups lose their `window.opener`. A blocked popup
+     * falls back to the redirect.
+     */
+    signInMode?: "redirect" | "popup";
+    /**
      * Pin the grant flow to a named runapps.ai project.  When set, the
      * SDK passes `project_id=<value>` to `/api/sdk/grant`, asking the
      * gateway to mint a project-bound `rrt_*` resource token for THAT
@@ -83,6 +93,8 @@ export declare class BrowserAuth {
     private readonly badgePosition;
     private token;
     private expiresAt;
+    private signInMode;
+    private popupWait;
     private userInfo;
     private listeners;
     private parentHandshake;
@@ -133,8 +145,15 @@ export declare class BrowserAuth {
      * `signIn()` redirect-grant flow and the user re-auths transparently.
      */
     invalidate(): void;
-    /** Force a redirect to the grant page. */
-    signIn(): void;
+    /** Start the grant flow: a redirect (default) or, in popup mode, a
+     *  popup window — then the returned promise resolves once the token
+     *  has arrived (and rejects if the popup is closed first). */
+    signIn(): Promise<void> | void;
+    private grantUrlForThisPage;
+    /** Popup grant flow. One popup at a time; concurrent callers share it. */
+    private signInPopup;
+    /** Inside the popup, after the token landed: close, or say so. */
+    private finishPopup;
     /**
      * Build the `/api/sdk/grant?…` URL the user is redirected to.  Split
      * out so tests can assert URL formation without a `window` context;
