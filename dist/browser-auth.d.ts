@@ -95,6 +95,7 @@ export declare class BrowserAuth {
     private expiresAt;
     private signInMode;
     private popupWait;
+    private popupOpenedAt;
     private userInfo;
     private listeners;
     private parentHandshake;

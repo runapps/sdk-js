@@ -38,8 +38,17 @@ const TOKEN_REFRESH_MARGIN_S = 60;
 // unsuffixed key, which preserves back-compat for already-persisted
 // tokens after upgrade.
 const STORAGE_KEY_BASE = "__runapps_auth_v1__";
-/** window.name of the sign-in popup; the page loaded in it closes itself. */
+/** window.name of the sign-in popup. */
 const POPUP_NAME = "runapps-signin";
+/** Query parameter marking the app URL the popup lands on when the host
+ *  has no callback page (window.name is reset by a COOP swap, so it
+ *  cannot carry the mark). */
+const POPUP_PARAM = "runapps_popup";
+/** The callback page every app host on the platform serves: it stores the
+ *  token for the app and closes, without loading the app. */
+const POPUP_CALLBACK_PATH = "/__runapps/signin.html";
+/** Hosts whose backend serves POPUP_CALLBACK_PATH. */
+const hasCallbackPage = (hostname) => /\.runapps\.dev$/i.test(hostname) || /\.localhost$/i.test(hostname);
 // Written by SDK 0.3 and earlier; read once and migrated, so an upgrade
 // keeps the user signed in.
 const LEGACY_STORAGE_KEY_BASE = "__runjobs_auth_v1__";
@@ -93,6 +102,7 @@ export class BrowserAuth {
     expiresAt = 0;
     signInMode;
     popupWait = null;
+    popupOpenedAt = 0;
     userInfo = null;
     listeners = [];
     parentHandshake = null;
@@ -126,8 +136,9 @@ export class BrowserAuth {
         // sticky flag — the user explicitly signed in again.
         if (this.consumeFragment()) {
             this.clearSignedOut();
-            if (window.name === POPUP_NAME) {
-                // We are the sign-in popup: the token is in localStorage, which
+            if (new URLSearchParams(location.search).has(POPUP_PARAM)) {
+                // We are the sign-in popup, landed on the app itself (no callback
+                // page on this host): the token is already in localStorage, which
                 // the opener (same origin) sees through its `storage` event.
                 this.finishPopup();
                 return;
@@ -310,8 +321,19 @@ export class BrowserAuth {
         this.signingIn = true;
         location.href = this.grantUrlForThisPage();
     }
-    grantUrlForThisPage() {
-        const ret = location.href.split("#")[0] ?? location.href;
+    grantUrlForThisPage(popup = false) {
+        let ret = location.href.split("#")[0] ?? location.href;
+        if (popup) {
+            if (hasCallbackPage(location.hostname)) {
+                const q = new URLSearchParams({ key: storageKey(this.project), origin: this.origin });
+                ret = location.origin + POPUP_CALLBACK_PATH + "?" + q.toString();
+            }
+            else {
+                const u = new URL(ret);
+                u.searchParams.set(POPUP_PARAM, "1");
+                ret = u.toString();
+            }
+        }
         const scheme = window.matchMedia?.("(prefers-color-scheme: dark)")
             .matches
             ? "dark"
@@ -325,28 +347,29 @@ export class BrowserAuth {
     }
     /** Popup grant flow. One popup at a time; concurrent callers share it. */
     signInPopup() {
-        if (this.popupWait)
+        // One popup at a time; a click a few seconds later (the user closed
+        // the first one, say) opens a fresh one and joins the same wait.
+        const now = Date.now();
+        if (this.popupWait && now - this.popupOpenedAt < 3000)
             return this.popupWait;
         this.clearSignedOut();
         const key = storageKey(this.project);
-        const win = window.open(this.grantUrlForThisPage(), POPUP_NAME, "popup=yes,width=520,height=700");
+        const win = window.open(this.grantUrlForThisPage(true), POPUP_NAME, "popup=yes,width=520,height=700");
         if (!win) {
             // Popup blocked: the redirect is the only way left.
             this.signingIn = true;
             location.href = this.grantUrlForThisPage();
             return new Promise(() => { });
         }
-        this.popupWait = new Promise((resolve, reject) => {
+        this.popupOpenedAt = now;
+        if (this.popupWait)
+            return this.popupWait;
+        // Under COOP the popup's handle is cut off as soon as it leaves this
+        // origin (`win.closed` reads true), so a closed popup cannot be told
+        // from one still signing in: the promise stays pending until a token
+        // arrives, like Puter's own sign-in.
+        this.popupWait = new Promise((resolve) => {
             let timer = 0;
-            const done = (err) => {
-                window.removeEventListener("storage", onStorage);
-                window.clearInterval(timer);
-                this.popupWait = null;
-                if (err)
-                    reject(err);
-                else
-                    resolve();
-            };
             const adopt = () => {
                 const before = this.token;
                 this.loadPersisted();
@@ -356,11 +379,10 @@ export class BrowserAuth {
                     this.setToken(this.token, this.expiresAt, this.userInfo ?? undefined);
                 else if (this.userInfo && !this.hideBadge)
                     this.renderBadge();
-                try {
-                    win.close();
-                }
-                catch { /* already gone */ }
-                done();
+                window.removeEventListener("storage", onStorage);
+                window.clearInterval(timer);
+                this.popupWait = null;
+                resolve();
                 return true;
             };
             const onStorage = (e) => {
@@ -368,12 +390,7 @@ export class BrowserAuth {
                     adopt();
             };
             window.addEventListener("storage", onStorage);
-            timer = window.setInterval(() => {
-                if (adopt())
-                    return;
-                if (win.closed)
-                    done(new Error("RunApps: sign-in was cancelled"));
-            }, 500);
+            timer = window.setInterval(adopt, 1000);
         });
         return this.popupWait;
     }
@@ -383,14 +400,21 @@ export class BrowserAuth {
             window.close();
         }
         catch { /* not script-closable */ }
-        window.setTimeout(() => {
-            if (window.closed)
-                return;
-            document.documentElement.innerHTML =
-                '<head><meta charset="utf-8"><title>Signed in</title></head>' +
-                    '<body style="margin:0;display:flex;align-items:center;justify-content:center;height:100vh;font:15px/1.5 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;color:#333;background:#fafafa">' +
-                    "<p>Signed in. You can close this window and go back to the app.</p></body>";
-        }, 400);
+        if (window.closed)
+            return;
+        // Still open: stop the app from loading and show a plain page instead.
+        try {
+            window.stop();
+        }
+        catch { /* ignore */ }
+        try {
+            document.open();
+            document.write('<!doctype html><html><head><meta charset="utf-8"><title>Signed in</title></head>' +
+                '<body style="margin:0;display:flex;align-items:center;justify-content:center;height:100vh;font:15px/1.5 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;color:#333;background:#fafafa;text-align:center">' +
+                '<div><p>Signed in. You can go back to the app.</p><button onclick="window.close()" style="padding:8px 16px;font:inherit;border:1px solid #ccc;border-radius:8px;background:#fff;cursor:pointer">Close this window</button></div></body></html>');
+            document.close();
+        }
+        catch { /* ignore */ }
     }
     /**
      * Build the `/api/sdk/grant?…` URL the user is redirected to.  Split
