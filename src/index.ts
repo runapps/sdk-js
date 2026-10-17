@@ -88,6 +88,7 @@ export {
   supportsVoiceClone,
   supportsInstructText,
   defaultVoice,
+  defaultModel,
 } from "./models.js";
 
 // Model options schema (input validation + capability introspection)

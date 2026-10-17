@@ -21,7 +21,7 @@ export { BrowserAuth } from "./browser-auth.js";
 export { SyncEngine, FilesRemote, installIndexedDBHook, } from "./sync/index.js";
 export { APIError } from "./errors.js";
 export { userMessage, systemMessage, assistantMessage, toolResultMessage, userMessageParts, textPart, imagePart, videoPart, audioPart, } from "./chat.js";
-export { hasCapabilityTag, acceptsModality, supportsVoiceClone, supportsInstructText, defaultVoice, } from "./models.js";
+export { hasCapabilityTag, acceptsModality, supportsVoiceClone, supportsInstructText, defaultVoice, defaultModel, } from "./models.js";
 export { getOptionsSchema, acceptsField, requiresField, allowedValuesFor, } from "./model_options.js";
 export { validateRequest } from "./validate.js";
 export { RealtimeSession, pcm16FromFloat32, float32FromPCM16, bytesToBase64, base64ToBytes, } from "./realtime.js";

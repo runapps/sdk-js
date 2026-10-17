@@ -180,3 +180,21 @@ test("models.list needs no token: no Authorization header, no sign-in redirect",
     }
   }
 });
+
+test("models.default picks the flagged model of a capability", async () => {
+  const { RunJobs, defaultModel } = await import("../dist/index.js");
+  const client = new RunJobs({
+    apiKey: "gw-test",
+    baseURL: "https://example.test",
+    fetch: async (url) => {
+      const cap = new URL(url).searchParams.get("capability");
+      const data = cap === "text_to_speech"
+        ? [{ id: "A", object: "model", capability: "text_to_speech" }, { id: "B", object: "model", capability: "text_to_speech", is_default: true }]
+        : [{ id: "Kimi", object: "model", capability: "text", is_default: true }, { id: "GPT", object: "model", capability: "text" }];
+      return new Response(JSON.stringify({ object: "list", data }), { status: 200, headers: { "content-type": "application/json" } });
+    },
+  });
+  assert.equal((await client.models.default()).id, "Kimi");
+  assert.equal((await client.models.default("text_to_speech")).id, "B");
+  assert.equal(defaultModel([{ id: "x", object: "model", capability: "text" }]), null);
+});

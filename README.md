@@ -361,9 +361,15 @@ Keep in mind:
 ```ts
 const all = await client.models.list();
 const video = await client.models.list({ capability: "video_generation" });
+
+// The platform's default for a capability: the model the admin starred,
+// else the first. One model per capability has `is_default: true`.
+const chat = await client.models.default();                  // capability "text"
+const tts = await client.models.default("text_to_speech");
+const pick = defaultModel(video, "video_generation");        // same, from a list you already have
 ```
 
-`client.models.list()` and `GET /v1/models` need no key or sign-in, so an app can show its model choices before the user signs in. Token prices are in pips per million tokens, where 1 USD is 1,000,000 pips. Each model carries `capability_tags`, such as `t2v`, `i2v`, `voice_clone` or `timestamps`; filter with `hasCapabilityTag`. Chat models list `input_modalities`; check with `acceptsModality`. Every model describes its accepted options through `getOptionsSchema(model)`: fields, bounds, enums, cross-field rules, and a catalogue of voices or emotions. `validateRequest(schema, body)` returns every problem at once for a form to show. Live prices are also on the [pricing page](https://www.runapps.ai/pricing).
+`client.models.list()` and `GET /v1/models` need no key or sign-in, so an app can show its model choices before the user signs in. Leave `model` out of a request and the gateway uses the user's own preferred model, else this default; `is_default` tells an app which one that is, so it can preselect it. Token prices are in pips per million tokens, where 1 USD is 1,000,000 pips. Each model carries `capability_tags`, such as `t2v`, `i2v`, `voice_clone` or `timestamps`; filter with `hasCapabilityTag`. Chat models list `input_modalities`; check with `acceptsModality`. Every model describes its accepted options through `getOptionsSchema(model)`: fields, bounds, enums, cross-field rules, and a catalogue of voices or emotions. `validateRequest(schema, body)` returns every problem at once for a form to show. Live prices are also on the [pricing page](https://www.runapps.ai/pricing).
 
 ## Image, audio, video, embeddings
 

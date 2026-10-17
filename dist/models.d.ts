@@ -10,6 +10,15 @@ export interface Model {
     capability: string;
     provider?: string;
     /**
+     * The model the platform uses for this capability when a request names
+     * none: the one the admin starred in the gateway settings, else the
+     * first of the capability. Exactly one model per capability carries it.
+     * Use `defaultModel` to pick it out of a list.
+     */
+    is_default?: boolean;
+    /** One or two sentences about the model, set on the gateway. */
+    description?: string;
+    /**
      * Server-derived "what this model can actually do" tags
      * (e.g. {id:"t2v", label:"Text-to-Video"}, {id:"i2v", label:"Image-to-Video"}).
      * Use `hasCapabilityTag` for stable filter checks; iterate for display.
@@ -74,6 +83,14 @@ export declare const supportsVoiceClone: (model: Model) => boolean;
 export declare const supportsInstructText: (model: Model) => boolean;
 /** Convenience: admin-set default voice for a TTS model, or null. */
 export declare const defaultVoice: (model: Model) => string | null;
+/**
+ * The platform's default model among `models` — the admin-starred one for
+ * the capability, else the first of the capability. With `capability`
+ * given, only that capability is considered; without it, the first
+ * default in list order (so pass a list from
+ * `client.models.list({ capability })`). Null when the list has none.
+ */
+export declare const defaultModel: (models: Model[], capability?: string) => Model | null;
 export declare class ModelsService {
     private readonly transport;
     constructor(transport: Transport);
@@ -84,5 +101,14 @@ export declare class ModelsService {
     list(opts?: ModelListOptions, init?: {
         signal?: AbortSignal;
     }): Promise<Model[]>;
+    /**
+     * The platform's default model for a capability (`"text"` unless given):
+     * the admin-starred one, else the first. What a request without `model`
+     * would use before the user's own preference. Null when the capability
+     * has no models.
+     */
+    default(capability?: string, init?: {
+        signal?: AbortSignal;
+    }): Promise<Model | null>;
 }
 //# sourceMappingURL=models.d.ts.map

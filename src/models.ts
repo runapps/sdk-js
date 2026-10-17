@@ -11,6 +11,15 @@ export interface Model {
   capability: string;
   provider?: string;
   /**
+   * The model the platform uses for this capability when a request names
+   * none: the one the admin starred in the gateway settings, else the
+   * first of the capability. Exactly one model per capability carries it.
+   * Use `defaultModel` to pick it out of a list.
+   */
+  is_default?: boolean;
+  /** One or two sentences about the model, set on the gateway. */
+  description?: string;
+  /**
    * Server-derived "what this model can actually do" tags
    * (e.g. {id:"t2v", label:"Text-to-Video"}, {id:"i2v", label:"Image-to-Video"}).
    * Use `hasCapabilityTag` for stable filter checks; iterate for display.
@@ -100,6 +109,18 @@ export const defaultVoice = (model: Model): string | null => {
   return typeof v === "string" ? v : null;
 };
 
+/**
+ * The platform's default model among `models` — the admin-starred one for
+ * the capability, else the first of the capability. With `capability`
+ * given, only that capability is considered; without it, the first
+ * default in list order (so pass a list from
+ * `client.models.list({ capability })`). Null when the list has none.
+ */
+export const defaultModel = (models: Model[], capability?: string): Model | null => {
+  const pool = capability ? models.filter((m) => m.capability === capability) : models;
+  return pool.find((m) => m.is_default) ?? null;
+};
+
 export class ModelsService {
   constructor(private readonly transport: Transport) {}
 
@@ -119,5 +140,15 @@ export class ModelsService {
     // signed-out user to sign in.
     const resp = await this.transport.getPublicJSON<{ data: Model[] }>(path, init);
     return resp.data;
+  }
+
+  /**
+   * The platform's default model for a capability (`"text"` unless given):
+   * the admin-starred one, else the first. What a request without `model`
+   * would use before the user's own preference. Null when the capability
+   * has no models.
+   */
+  async default(capability = "text", init?: { signal?: AbortSignal }): Promise<Model | null> {
+    return defaultModel(await this.list({ capability }, init), capability);
   }
 }

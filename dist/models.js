@@ -34,6 +34,17 @@ export const defaultVoice = (model) => {
     const v = model.options?.["default_voice"];
     return typeof v === "string" ? v : null;
 };
+/**
+ * The platform's default model among `models` — the admin-starred one for
+ * the capability, else the first of the capability. With `capability`
+ * given, only that capability is considered; without it, the first
+ * default in list order (so pass a list from
+ * `client.models.list({ capability })`). Null when the list has none.
+ */
+export const defaultModel = (models, capability) => {
+    const pool = capability ? models.filter((m) => m.capability === capability) : models;
+    return pool.find((m) => m.is_default) ?? null;
+};
 export class ModelsService {
     transport;
     constructor(transport) {
@@ -52,6 +63,15 @@ export class ModelsService {
         // signed-out user to sign in.
         const resp = await this.transport.getPublicJSON(path, init);
         return resp.data;
+    }
+    /**
+     * The platform's default model for a capability (`"text"` unless given):
+     * the admin-starred one, else the first. What a request without `model`
+     * would use before the user's own preference. Null when the capability
+     * has no models.
+     */
+    async default(capability = "text", init) {
+        return defaultModel(await this.list({ capability }, init), capability);
     }
 }
 //# sourceMappingURL=models.js.map
