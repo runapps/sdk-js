@@ -24,7 +24,6 @@ test("RunJobs constructs with apiKey and exposes all services", () => {
   assert.ok(client.image, "image service");
   assert.ok(client.audio, "audio service");
   assert.ok(client.video, "video service");
-  assert.ok(client.computer, "computer service");
 });
 
 test("outside a browser, a client with no key throws", () => {

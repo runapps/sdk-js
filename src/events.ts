@@ -1,8 +1,8 @@
 /**
  * Typed runtime event bus for SDK call telemetry.
  *
- * Every LLM-ish service method (chat, embeddings, image, audio, video,
- * computer) emits start / streamDelta / end / error events on the
+ * Every LLM-ish service method (chat, embeddings, image, audio, video)
+ * emits start / streamDelta / end / error events on the
  * shared `client.events` bus so UI overlays (e.g. the bottom-right
  * identity badge with its activity ring) can render real-time state
  * without business code having to thread anything through.
@@ -32,7 +32,6 @@ export type SDKCapability =
   | "text_to_speech"
   | "speech_to_text"
   | "video_generation"
-  | "computer_use"
   /** A realtime voice session (`client.realtime`). */
   | "realtime"
   /** A file-space call (`client.files`). Shown on the badge while in

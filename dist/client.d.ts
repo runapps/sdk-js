@@ -4,7 +4,6 @@ import { ImageService } from "./image.js";
 import { AudioService } from "./audio.js";
 import { RealtimeService } from "./realtime.js";
 import { VideoService } from "./video.js";
-import { ComputerService } from "./computer.js";
 import { FilesService } from "./files.js";
 import { EmbeddingsService } from "./embeddings.js";
 import { BrowserAuth, type BrowserUser } from "./browser-auth.js";
@@ -142,7 +141,6 @@ export declare class RunApps {
     readonly image: ImageService;
     readonly audio: AudioService;
     readonly video: VideoService;
-    readonly computer: ComputerService;
     readonly files: FilesService;
     readonly embeddings: EmbeddingsService;
     /** Realtime voice sessions over WebSocket — see `RealtimeService.connect`. */
@@ -169,7 +167,7 @@ export declare class RunApps {
     } | null;
     /**
      * Runtime event bus for SDK-call telemetry. Every LLM-ish service
-     * (chat / embeddings / image / audio / video / computer) fires
+     * (chat / embeddings / image / audio / video) fires
      * `request:start`, `request:streamDelta`, `request:end`, and
      * `request:error` events here so UI overlays — like the bottom-right
      * identity badge's activity ring — can render real-time state

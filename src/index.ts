@@ -157,13 +157,6 @@ export type {
 // Media helpers (shared by image + video + chat-multimodal)
 export { encodeImageUrl, decodeMediaUrl } from "./media.js";
 
-// Computer
-export type {
-  ComputerStepParams,
-  ComputerContentBlock,
-  ComputerResponse,
-} from "./computer.js";
-
 // Files (per-project file system)
 export type {
   FileObject,

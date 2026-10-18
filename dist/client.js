@@ -5,7 +5,6 @@ import { ImageService } from "./image.js";
 import { AudioService } from "./audio.js";
 import { RealtimeService } from "./realtime.js";
 import { VideoService } from "./video.js";
-import { ComputerService } from "./computer.js";
 import { FilesService } from "./files.js";
 import { EmbeddingsService } from "./embeddings.js";
 import { BrowserAuth } from "./browser-auth.js";
@@ -44,7 +43,6 @@ export class RunApps {
     image;
     audio;
     video;
-    computer;
     files;
     embeddings;
     /** Realtime voice sessions over WebSocket — see `RealtimeService.connect`. */
@@ -65,7 +63,7 @@ export class RunApps {
     sync = null;
     /**
      * Runtime event bus for SDK-call telemetry. Every LLM-ish service
-     * (chat / embeddings / image / audio / video / computer) fires
+     * (chat / embeddings / image / audio / video) fires
      * `request:start`, `request:streamDelta`, `request:end`, and
      * `request:error` events here so UI overlays — like the bottom-right
      * identity badge's activity ring — can render real-time state
@@ -135,7 +133,7 @@ export class RunApps {
             ...(options.fetch ? { fetchImpl: options.fetch } : {}),
         });
         // Service constructors receive the shared event bus so each call
-        // path (chat/embeddings/image/audio/video/computer) can emit
+        // path (chat/embeddings/image/audio/video) can emit
         // start/end/error around its network operations. Files and Models
         // intentionally don't take it — they're infrastructure, not
         // user-facing LLM calls, and surfacing them would clutter the
@@ -145,7 +143,6 @@ export class RunApps {
         this.image = new ImageService(transport, this.events);
         this.audio = new AudioService(transport, this.events);
         this.video = new VideoService(transport, this.events);
-        this.computer = new ComputerService(transport, this.events);
         // `project` also scopes the file URLs (/v1/p/<project>/files/...),
         // so two apps never issue byte-identical file requests.  Omitted →
         // legacy unscoped /v1/files/... paths.
