@@ -1,4 +1,5 @@
 import type { Transport } from "./transport.js";
+import type { Quote } from "./quote.js";
 import type { PromptInput } from "./chat.js";
 import type { Usage } from "./types.js";
 import type { SDKEvents } from "./events.js";
@@ -119,6 +120,20 @@ export class AudioService {
   // (Removed: listVoices — fetch voice metadata via client.models.get /
   //  client.models.list and read model.options.voices /
   //  model.options.supported_emotions.)
+
+  /** What `speech(model, params)` (or `speechAsync`) would cost, without running it. */
+  async quoteSpeech(
+    model: string,
+    params: SpeechParams,
+    init?: { signal?: AbortSignal },
+  ): Promise<Quote> {
+    const r = await this.transport.postJSON<{ quote: Quote }>(
+      "/v1/quote/audio/speech",
+      buildSpeechBody(model, params),
+      init,
+    );
+    return r.quote;
+  }
 
   /**
    * Generate speech from text. Output bytes are base64-decoded by the SDK

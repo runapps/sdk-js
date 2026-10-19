@@ -1,4 +1,5 @@
 import type { Transport } from "./transport.js";
+import type { Quote } from "./quote.js";
 import type { PromptInput } from "./chat.js";
 import type { Usage } from "./types.js";
 import type { SDKEvents } from "./events.js";
@@ -138,6 +139,20 @@ export class ImageService {
     private readonly transport: Transport,
     private readonly events: SDKEvents,
   ) {}
+
+  /** What `generate(model, params)` (or `generateAsync`) would cost, without running it. */
+  async quote(
+    model: string,
+    params: ImageGenerateParams,
+    init?: { signal?: AbortSignal },
+  ): Promise<Quote> {
+    const r = await this.transport.postJSON<{ quote: Quote }>(
+      "/v1/quote/images/generations",
+      { model, ...params },
+      init,
+    );
+    return r.quote;
+  }
 
   /**
    * Generate images from a text prompt via the synchronous endpoint.

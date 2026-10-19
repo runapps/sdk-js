@@ -26,6 +26,7 @@ export type { SpeechParams, SpeechResponse, TranscribeParams, TranscribeResponse
 export type { RealtimeEvent, RealtimeUsage, RealtimeCloseInfo, RealtimeConnectOptions, WebSocketLike, WebSocketConstructor, } from "./realtime.js";
 export { RealtimeSession, pcm16FromFloat32, float32FromPCM16, bytesToBase64, base64ToBytes, } from "./realtime.js";
 export type { VideoGenerateParams, VideoTask, VideoStatus, VideoUsageTokens, WaitOptions, } from "./video.js";
+export type { Quote } from "./quote.js";
 export { encodeImageUrl, decodeMediaUrl } from "./media.js";
 export type { FileObject, FileListResult, PutOptions as FilePutOptions, SignOptions as FileSignOptions, ListOptions as FileListOptions, PutFromURLOptions as FilePutFromURLOptions, BatchOp as FileBatchOp, BatchResult as FileBatchResult, } from "./files.js";
 export type { EmbeddingsParams, Embedding, EmbeddingsUsage, EmbeddingsResponse, } from "./embeddings.js";

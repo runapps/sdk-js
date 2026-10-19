@@ -369,7 +369,7 @@ const tts = await client.models.default("text_to_speech");
 const pick = defaultModel(video, "video_generation");        // same, from a list you already have
 ```
 
-`client.models.list()` and `GET /v1/models` need no key or sign-in, so an app can show its model choices before the user signs in. Leave `model` out of a request and the gateway uses the user's own preferred model, else this default; `is_default` tells an app which one that is, so it can preselect it. Token prices are in pips per million tokens, where 1 USD is 1,000,000 pips. Each model carries `capability_tags`, such as `t2v`, `i2v`, `voice_clone` or `timestamps`; filter with `hasCapabilityTag`. Chat models list `input_modalities`; check with `acceptsModality`. Every model describes its accepted options through `getOptionsSchema(model)`: fields, bounds, enums, cross-field rules, and a catalogue of voices or emotions. `validateRequest(schema, body)` returns every problem at once for a form to show. Live prices are also on the [pricing page](https://www.runapps.ai/pricing).
+`client.models.list()` and `GET /v1/models` need no key or sign-in, so an app can show its model choices before the user signs in. Leave `model` out of a request and the gateway uses the user's own preferred model, else this default; `is_default` tells an app which one that is, so it can preselect it. Prices are in pips, where 1 USD is 10,000 pips: token prices per million tokens, `fixed_cost` per image, second or call. A video model priced by resolution (Seedance) also lists `fixed_cost_by_resolution`, a second at each resolution; 1080p costs about 2.5× 720p. Each model carries `capability_tags`, such as `t2v`, `i2v`, `voice_clone` or `timestamps`; filter with `hasCapabilityTag`. Chat models list `input_modalities`; check with `acceptsModality`. Every model describes its accepted options through `getOptionsSchema(model)`: fields, bounds, enums, cross-field rules, and a catalogue of voices or emotions. `validateRequest(schema, body)` returns every problem at once for a form to show. Live prices are also on the [pricing page](https://www.runapps.ai/pricing).
 
 ## Image, audio, video, embeddings
 
@@ -389,7 +389,8 @@ const text = await client.audio.transcribe("OpenAI/Whisper", { file: { data: aud
 const fromUrl = await client.audio.transcribeAsync("Doubao ASR 2.0", { url: "https://…/talk.mp3" }); // no upload
 // speechAsync / transcribeAsync for long jobs; voices and emotions are in getOptionsSchema(model).catalog
 
-// Video: always async.
+// Video: always async. quote() prices a call without running it (USD, what the user pays).
+const q = await client.video.quote("Seedance 2.5", { prompt: "a gentle ocean wave", duration: 15, resolution: "720p" });
 const task = await client.video.generate("MiniMax Hailuo 2.3", { prompt: "a gentle ocean wave", duration: 5 });
 const status = await client.video.wait(task.id, { pollIntervalMs: 5000 });
 if (status.status === "succeeded") await client.video.getContent(task.id);
@@ -397,6 +398,8 @@ if (status.status === "succeeded") await client.video.getContent(task.id);
 // Embeddings.
 const e = await client.embeddings.create("text-embedding-3-small", { input: ["alpha", "beta"] });
 ```
+
+`client.video.quote`, `client.image.quote` and `client.audio.quoteSpeech` take the same arguments as the call and return `{ total_cost, note }`: what the signed-in user would be charged, fees included, without running it. Video is the one to quote: a 30 s 1080p Seedance clip costs dollars, and the price depends on resolution, duration and reference clips.
 
 `VideoGenerateParams` covers keyframes (`first_frame_url`, `last_frame_url`), reference inputs, source video, image and audio drivers, `service_tier: "flex"`, and more. Every `*_url` accepts `https://` or a `data:` URI (`encodeImageUrl(bytes)`).
 

@@ -1,4 +1,5 @@
 import type { Transport } from "./transport.js";
+import type { Quote } from "./quote.js";
 import type { PromptInput } from "./chat.js";
 import type { Usage } from "./types.js";
 import type { SDKEvents } from "./events.js";
@@ -126,6 +127,10 @@ export declare class ImageService {
     private readonly transport;
     private readonly events;
     constructor(transport: Transport, events: SDKEvents);
+    /** What `generate(model, params)` (or `generateAsync`) would cost, without running it. */
+    quote(model: string, params: ImageGenerateParams, init?: {
+        signal?: AbortSignal;
+    }): Promise<Quote>;
     /**
      * Generate images from a text prompt via the synchronous endpoint.
      * For long-running requests (large Seedream batches, slow upstreams)

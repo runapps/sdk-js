@@ -13,6 +13,11 @@ export class AudioService {
     // (Removed: listVoices — fetch voice metadata via client.models.get /
     //  client.models.list and read model.options.voices /
     //  model.options.supported_emotions.)
+    /** What `speech(model, params)` (or `speechAsync`) would cost, without running it. */
+    async quoteSpeech(model, params, init) {
+        const r = await this.transport.postJSON("/v1/quote/audio/speech", buildSpeechBody(model, params), init);
+        return r.quote;
+    }
     /**
      * Generate speech from text. Output bytes are base64-decoded by the SDK
      * — `response.data` is a `Uint8Array` you can write directly to disk:

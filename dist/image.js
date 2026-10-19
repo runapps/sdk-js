@@ -7,6 +7,11 @@ export class ImageService {
         this.transport = transport;
         this.events = events;
     }
+    /** What `generate(model, params)` (or `generateAsync`) would cost, without running it. */
+    async quote(model, params, init) {
+        const r = await this.transport.postJSON("/v1/quote/images/generations", { model, ...params }, init);
+        return r.quote;
+    }
     /**
      * Generate images from a text prompt via the synchronous endpoint.
      * For long-running requests (large Seedream batches, slow upstreams)

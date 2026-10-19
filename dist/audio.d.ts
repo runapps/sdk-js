@@ -1,4 +1,5 @@
 import type { Transport } from "./transport.js";
+import type { Quote } from "./quote.js";
 import type { PromptInput } from "./chat.js";
 import type { Usage } from "./types.js";
 import type { SDKEvents } from "./events.js";
@@ -85,6 +86,10 @@ export declare class AudioService {
     private readonly transport;
     private readonly events;
     constructor(transport: Transport, events: SDKEvents);
+    /** What `speech(model, params)` (or `speechAsync`) would cost, without running it. */
+    quoteSpeech(model: string, params: SpeechParams, init?: {
+        signal?: AbortSignal;
+    }): Promise<Quote>;
     /**
      * Generate speech from text. Output bytes are base64-decoded by the SDK
      * — `response.data` is a `Uint8Array` you can write directly to disk:

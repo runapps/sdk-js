@@ -1,4 +1,5 @@
 import type { Transport } from "./transport.js";
+import type { Quote } from "./quote.js";
 import type { PromptInput } from "./chat.js";
 import type { Usage } from "./types.js";
 import type { SDKEvents } from "./events.js";
@@ -159,6 +160,20 @@ export class VideoService {
           init,
         ),
     );
+  }
+
+  /** What `generate(model, params)` would cost, without running it. */
+  async quote(
+    model: string,
+    params: VideoGenerateParams,
+    init?: { signal?: AbortSignal },
+  ): Promise<Quote> {
+    const r = await this.transport.postJSON<{ quote: Quote }>(
+      "/v1/quote/videos/generations",
+      { model, ...params },
+      init,
+    );
+    return r.quote;
   }
 
   /** Fetch the current status of a task. */

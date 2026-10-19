@@ -1,4 +1,5 @@
 import type { Transport } from "./transport.js";
+import type { Quote } from "./quote.js";
 import type { PromptInput } from "./chat.js";
 import type { Usage } from "./types.js";
 import type { SDKEvents } from "./events.js";
@@ -117,6 +118,10 @@ export declare class VideoService {
     generate(model: string, params: VideoGenerateParams, init?: {
         signal?: AbortSignal;
     }): Promise<VideoTask>;
+    /** What `generate(model, params)` would cost, without running it. */
+    quote(model: string, params: VideoGenerateParams, init?: {
+        signal?: AbortSignal;
+    }): Promise<Quote>;
     /** Fetch the current status of a task. */
     getStatus(taskID: string, init?: {
         signal?: AbortSignal;

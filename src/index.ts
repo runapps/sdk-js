@@ -154,6 +154,9 @@ export type {
   WaitOptions,
 } from "./video.js";
 
+// Quotes: what a call would cost (video.quote, image.quote, audio.quoteSpeech)
+export type { Quote } from "./quote.js";
+
 // Media helpers (shared by image + video + chat-multimodal)
 export { encodeImageUrl, decodeMediaUrl } from "./media.js";
 

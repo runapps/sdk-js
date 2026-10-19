@@ -43,7 +43,14 @@ export interface Model {
     input_price_per_mtok: number;
     output_price_per_mtok: number;
     fixed_price: boolean;
+    /** Pips per unit (an image, a second of video or speech). */
     fixed_cost: number;
+    /**
+     * A second's price per resolution, in pips (16:9, no input video), for a
+     * video model priced by resolution — Seedance bills tokens, so 1080p
+     * costs about 2.5× 720p. `fixed_cost` is then the default resolution's.
+     */
+    fixed_cost_by_resolution?: Record<string, number>;
     max_tokens: number;
     max_input_tokens: number;
     icon_url?: string;

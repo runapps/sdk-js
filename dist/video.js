@@ -17,6 +17,11 @@ export class VideoService {
     async generate(model, params, init) {
         return wrapEvents(this.events, { model, capability: "video_generation" }, () => this.transport.postJSON("/v1/videos/generations", { model, ...params }, init));
     }
+    /** What `generate(model, params)` would cost, without running it. */
+    async quote(model, params, init) {
+        const r = await this.transport.postJSON("/v1/quote/videos/generations", { model, ...params }, init);
+        return r.quote;
+    }
     /** Fetch the current status of a task. */
     async getStatus(taskID, init) {
         return this.transport.getJSON(`/v1/videos/generations/${encodeURIComponent(taskID)}`, init);

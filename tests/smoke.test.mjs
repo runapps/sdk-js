@@ -197,3 +197,28 @@ test("models.default picks the flagged model of a capability", async () => {
   assert.equal((await client.models.default("text_to_speech")).id, "B");
   assert.equal(defaultModel([{ id: "x", object: "model", capability: "text" }]), null);
 });
+
+test("quote() posts the call's own body to /v1/quote/<endpoint> and returns the quote", async () => {
+  const seen = [];
+  const fakeFetch = async (input, init) => {
+    seen.push({ url: String(input), body: JSON.parse(init.body) });
+    return new Response(JSON.stringify({ quote: { total_cost: 1.28, note: "720p 16:9 · 5s out" } }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new RunJobs({ apiKey: "gw-test", fetch: fakeFetch });
+  const q = await client.video.quote("Seedance 2.5", { prompt: "a wave", duration: 5 });
+  assert.deepEqual(q, { total_cost: 1.28, note: "720p 16:9 · 5s out" });
+  await client.image.quote("Seedream 5.0", { prompt: "a cat", n: 2 });
+  await client.audio.quoteSpeech("Seed Audio 1.0", { input: "hi" });
+  assert.deepEqual(seen.map((s) => new URL(s.url).pathname), [
+    "/v1/quote/videos/generations",
+    "/v1/quote/images/generations",
+    "/v1/quote/audio/speech",
+  ]);
+  assert.equal(seen[0].body.model, "Seedance 2.5");
+  assert.equal(seen[0].body.duration, 5);
+  assert.equal(seen[1].body.n, 2);
+  assert.equal(seen[2].body.input, "hi");
+});
