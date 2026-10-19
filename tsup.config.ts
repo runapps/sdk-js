@@ -7,7 +7,21 @@ import { defineConfig } from "tsup";
 //   <script>
 //     const client = new RunApps.Client({ authProvider: "runjobs" });
 //   </script>
-export default defineConfig({
+export default defineConfig([
+// CommonJS build for Node projects that `require()` the package. tsc
+// produces the ESM files; this is the same entry bundled as one .cjs
+// (Node < 22.12 cannot require ESM, and bundlers resolving with the
+// "require" condition need an entry for it).
+{
+  entry: { index: "src/index.ts" },
+  format: ["cjs"],
+  sourcemap: true,
+  clean: false,
+  target: "es2020",
+  platform: "neutral",
+  outExtension: () => ({ js: ".cjs" }),
+},
+{
   entry: { sdk: "src/index.ts" },
   format: ["iife"],
   globalName: "RunApps",
@@ -26,4 +40,4 @@ export default defineConfig({
   // `new RunApps.Client(...)` work.
   // `RunJobs` is kept as a second global for pages written before the rename.
   footer: { js: "RunApps = Object.assign(RunApps.Client, RunApps); var RunJobs = RunApps;" },
-});
+}]);

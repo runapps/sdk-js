@@ -1,6 +1,6 @@
 {
   "name": "@runappsai/sdk",
-  "version": "0.10.0",
+  "version": "0.10.1",
   "description": "JavaScript / TypeScript client for the RunApps AI Gateway",
   "license": "MIT",
   "author": "RunApps",
@@ -24,14 +24,16 @@
   "engines": {
     "node": ">=18"
   },
-  "main": "./dist/index.js",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "unpkg": "./dist/sdk.umd.js",
   "jsdelivr": "./dist/sdk.umd.js",
   "exports": {
     ".": {
+      "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
-      "types": "./dist/index.d.ts"
+      "require": "./dist/index.cjs"
     },
     "./browser": "./dist/sdk.umd.js"
   },
