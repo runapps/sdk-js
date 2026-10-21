@@ -24,7 +24,19 @@ export class FilesRemote implements SyncRemote {
   }
 
   async getJSON(path: string, ifNoneMatch?: string) {
-    const r = await this.files.readJSON(path, ifNoneMatch ? { ifNoneMatch } : undefined);
+    let r;
+    try {
+      r = await this.files.readJSON(path, ifNoneMatch ? { ifNoneMatch } : undefined);
+    } catch (e) {
+      // A shard that is not JSON (a write cut short before the gateway
+      // checked lengths) would stall every pull; treat it as absent so
+      // the next push writes it whole again.
+      if (e instanceof SyntaxError) {
+        console.warn("[runapps sync] ignoring unreadable shard", path);
+        return { status: "missing" as const };
+      }
+      throw e;
+    }
     if (r.notModified) return { status: "unchanged" as const };
     if (r.value === undefined) return { status: "missing" as const };
     return { status: "ok" as const, value: r.value, etag: r.etag ?? "" };

@@ -257,6 +257,8 @@ var Transport = class {
         ...await this.authHeaders(),
         "Content-Type": opts?.contentType ?? "application/octet-stream"
       };
+      const size = bodyByteLength(body);
+      if (size !== void 0) headers["X-Content-Length"] = String(size);
       if (opts?.headers) Object.assign(headers, opts.headers);
       return {
         method: "PUT",
@@ -319,6 +321,15 @@ function parseServerDate(h) {
   if (!h) return void 0;
   const t = Date.parse(h);
   return Number.isNaN(t) ? void 0 : t;
+}
+function bodyByteLength(body) {
+  if (typeof body === "string") {
+    return typeof TextEncoder !== "undefined" ? new TextEncoder().encode(body).byteLength : void 0;
+  }
+  if (typeof Blob !== "undefined" && body instanceof Blob) return body.size;
+  if (body instanceof ArrayBuffer) return body.byteLength;
+  if (ArrayBuffer.isView(body)) return body.byteLength;
+  return void 0;
 }
 
 // src/events.ts
@@ -4823,7 +4834,16 @@ var FilesRemote = class {
     return out;
   }
   async getJSON(path, ifNoneMatch) {
-    const r = await this.files.readJSON(path, ifNoneMatch ? { ifNoneMatch } : void 0);
+    let r;
+    try {
+      r = await this.files.readJSON(path, ifNoneMatch ? { ifNoneMatch } : void 0);
+    } catch (e) {
+      if (e instanceof SyntaxError) {
+        console.warn("[runapps sync] ignoring unreadable shard", path);
+        return { status: "missing" };
+      }
+      throw e;
+    }
     if (r.notModified) return { status: "unchanged" };
     if (r.value === void 0) return { status: "missing" };
     return { status: "ok", value: r.value, etag: r.etag ?? "" };

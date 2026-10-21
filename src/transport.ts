@@ -268,6 +268,13 @@ export class Transport {
         ...(await this.authHeaders()),
         "Content-Type": opts?.contentType ?? "application/octet-stream",
       };
+      // How many bytes we are sending.  A proxy that streams request
+      // bodies can pass on a body cut short by a page that went away
+      // mid-upload as if it were whole; the gateway refuses a body
+      // whose length does not match this (400), so a truncated file is
+      // never stored.
+      const size = bodyByteLength(body);
+      if (size !== undefined) headers["X-Content-Length"] = String(size);
       if (opts?.headers) Object.assign(headers, opts.headers);
       return {
         method: "PUT",
@@ -350,4 +357,16 @@ export function parseServerDate(h: string | null): number | undefined {
   if (!h) return undefined;
   const t = Date.parse(h);
   return Number.isNaN(t) ? undefined : t;
+}
+
+/** The byte length of a PUT body when it is known up front; undefined for
+ *  streams and forms, which the browser frames itself. */
+export function bodyByteLength(body: BodyInit): number | undefined {
+  if (typeof body === "string") {
+    return typeof TextEncoder !== "undefined" ? new TextEncoder().encode(body).byteLength : undefined;
+  }
+  if (typeof Blob !== "undefined" && body instanceof Blob) return body.size;
+  if (body instanceof ArrayBuffer) return body.byteLength;
+  if (ArrayBuffer.isView(body)) return body.byteLength;
+  return undefined;
 }

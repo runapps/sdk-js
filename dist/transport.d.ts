@@ -143,4 +143,7 @@ export declare class Transport {
  */
 export declare function cleanETag(raw: string | null | undefined): string;
 export declare function parseServerDate(h: string | null): number | undefined;
+/** The byte length of a PUT body when it is known up front; undefined for
+ *  streams and forms, which the browser frames itself. */
+export declare function bodyByteLength(body: BodyInit): number | undefined;
 //# sourceMappingURL=transport.d.ts.map

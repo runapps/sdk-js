@@ -8,11 +8,11 @@ export declare class FilesRemote implements SyncRemote {
         etag: string;
     }[]>;
     getJSON(path: string, ifNoneMatch?: string): Promise<{
-        status: "unchanged";
+        status: "missing";
         value?: undefined;
         etag?: undefined;
     } | {
-        status: "missing";
+        status: "unchanged";
         value?: undefined;
         etag?: undefined;
     } | {
