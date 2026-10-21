@@ -28,11 +28,18 @@ export class FilesRemote {
         }
         catch (e) {
             // A shard that is not JSON (a write cut short before the gateway
-            // checked lengths) would stall every pull; treat it as absent so
-            // the next push writes it whole again.
+            // checked lengths) would stall every pull.  Hand it back as an
+            // empty shard *with its ETag*, so the next push overwrites it with
+            // If-Match instead of trying to create it (409 → re-pull → 409 …).
             if (e instanceof SyntaxError) {
-                console.warn("[runapps sync] ignoring unreadable shard", path);
-                return { status: "missing" };
+                console.warn("[runapps sync] unreadable shard, will be rewritten", path);
+                try {
+                    const st = await this.files.stat(path);
+                    return { status: "ok", value: null, etag: st.etag ?? "", serverTime: st.last_modified ? Date.parse(st.last_modified) : undefined };
+                }
+                catch {
+                    return { status: "missing" };
+                }
             }
             throw e;
         }

@@ -4839,8 +4839,13 @@ var FilesRemote = class {
       r = await this.files.readJSON(path, ifNoneMatch ? { ifNoneMatch } : void 0);
     } catch (e) {
       if (e instanceof SyntaxError) {
-        console.warn("[runapps sync] ignoring unreadable shard", path);
-        return { status: "missing" };
+        console.warn("[runapps sync] unreadable shard, will be rewritten", path);
+        try {
+          const st = await this.files.stat(path);
+          return { status: "ok", value: null, etag: st.etag ?? "", serverTime: st.last_modified ? Date.parse(st.last_modified) : void 0 };
+        } catch {
+          return { status: "missing" };
+        }
       }
       throw e;
     }
