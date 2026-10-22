@@ -7,6 +7,7 @@ import { RealtimeService } from "./realtime.js";
 import { VideoService } from "./video.js";
 import { FilesService } from "./files.js";
 import { EmbeddingsService } from "./embeddings.js";
+import { AssetsService } from "./assets.js";
 import { BrowserAuth } from "./browser-auth.js";
 import { FilesRemote, SyncEngine } from "./sync/index.js";
 import { SDKEvents } from "./events.js";
@@ -47,6 +48,9 @@ export class RunApps {
     embeddings;
     /** Realtime voice sessions over WebSocket — see `RealtimeService.connect`. */
     realtime;
+    /** Seedance asset verification (a gated feature) — see `AssetsService`. */
+    assets;
+    transport;
     /**
      * Browser auth helper, populated only when `authProvider: "runapps"`.
      * Use `client.signIn()` and `client.user` for the common cases; the
@@ -149,6 +153,8 @@ export class RunApps {
         this.files = new FilesService(transport, options.project, this.events, options.filesBase);
         this.embeddings = new EmbeddingsService(transport, this.events);
         this.realtime = new RealtimeService(transport, this.events);
+        this.assets = new AssetsService(transport);
+        this.transport = transport;
         // Sync: an app on RunApps gets it unless it says no. It
         // stores under the signed-in user, so only browser sign-in mode has
         // someone to sync for.
@@ -180,6 +186,14 @@ export class RunApps {
      */
     signOut() {
         this.auth?.signOut();
+    }
+    /**
+     * The caller as the platform sees them, with the gated features the
+     * platform enabled for them (e.g. "seedance_asset_verify"), so an app
+     * shows a gated control only to those who have it.
+     */
+    me(init) {
+        return this.transport.getJSON("/v1/me", init);
     }
     /** Currently-authenticated user (runapps auth mode), or null. */
     get user() {

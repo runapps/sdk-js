@@ -24,6 +24,7 @@ var src_exports = {};
 __export(src_exports, {
   APIError: () => APIError,
   ActivityTracker: () => ActivityTracker,
+  AssetsService: () => AssetsService,
   BrowserAuth: () => BrowserAuth,
   Client: () => RunApps,
   FilesRemote: () => FilesRemote,
@@ -66,13 +67,21 @@ module.exports = __toCommonJS(src_exports);
 
 // src/errors.ts
 var APIError = class extends Error {
-  constructor(statusCode, type, message) {
+  constructor(statusCode, type, message, code, retryAfter) {
     super(`runapps: ${statusCode} ${type}: ${message}`);
     __publicField(this, "statusCode");
     __publicField(this, "type");
+    /** The body's machine-readable `code` when it has one, e.g. "busy",
+     *  "feature_not_enabled" (assets.verify). */
+    __publicField(this, "code");
+    /** Seconds to wait before retrying, from a 429's `retry_after` or
+     *  `Retry-After`. */
+    __publicField(this, "retryAfter");
     this.name = "APIError";
     this.statusCode = statusCode;
     this.type = type;
+    if (code !== void 0) this.code = code;
+    if (retryAfter !== void 0) this.retryAfter = retryAfter;
   }
 };
 
@@ -305,13 +314,19 @@ var Transport = class {
     const text = await resp.text();
     let type = "error";
     let message = text || resp.statusText;
+    let code;
+    let retryAfter;
     try {
       const parsed = JSON.parse(text);
       if (parsed.type) type = parsed.type;
       if (parsed.message) message = parsed.message;
+      if (typeof parsed.code === "string") code = parsed.code;
+      if (typeof parsed.retry_after === "number") retryAfter = parsed.retry_after;
     } catch {
     }
-    return new APIError(resp.status, type, message);
+    const header = Number(resp.headers.get("Retry-After"));
+    if (retryAfter === void 0 && header > 0) retryAfter = header;
+    return new APIError(resp.status, type, message, code, retryAfter);
   }
 };
 function cleanETag(raw) {
@@ -1901,6 +1916,17 @@ var EmbeddingsService = class {
         costUSD: r.usage?.total_cost
       })
     );
+  }
+};
+
+// src/assets.ts
+var AssetsService = class {
+  constructor(transport) {
+    __publicField(this, "transport", transport);
+  }
+  /** Verify a picture (an http(s) URL or a data: URI) for Seedance. */
+  async verify(url, init) {
+    return this.transport.postJSON("/v1/assets/verify", { url }, init);
   }
 };
 
@@ -4892,6 +4918,9 @@ var RunApps = class {
     __publicField(this, "embeddings");
     /** Realtime voice sessions over WebSocket — see `RealtimeService.connect`. */
     __publicField(this, "realtime");
+    /** Seedance asset verification (a gated feature) — see `AssetsService`. */
+    __publicField(this, "assets");
+    __publicField(this, "transport");
     /**
      * Browser auth helper, populated only when `authProvider: "runapps"`.
      * Use `client.signIn()` and `client.user` for the common cases; the
@@ -4962,6 +4991,8 @@ var RunApps = class {
     this.files = new FilesService(transport, options.project, this.events, options.filesBase);
     this.embeddings = new EmbeddingsService(transport, this.events);
     this.realtime = new RealtimeService(transport, this.events);
+    this.assets = new AssetsService(transport);
+    this.transport = transport;
     const wantSync = options.sync ?? this.auth !== null;
     if (wantSync && typeof indexedDB !== "undefined" && this.auth) {
       const auth = this.auth;
@@ -4993,6 +5024,14 @@ var RunApps = class {
    */
   signOut() {
     this.auth?.signOut();
+  }
+  /**
+   * The caller as the platform sees them, with the gated features the
+   * platform enabled for them (e.g. "seedance_asset_verify"), so an app
+   * shows a gated control only to those who have it.
+   */
+  me(init) {
+    return this.transport.getJSON("/v1/me", init);
   }
   /** Currently-authenticated user (runapps auth mode), or null. */
   get user() {

@@ -19,6 +19,12 @@
 export declare class APIError extends Error {
     readonly statusCode: number;
     readonly type: string;
-    constructor(statusCode: number, type: string, message: string);
+    /** The body's machine-readable `code` when it has one, e.g. "busy",
+     *  "feature_not_enabled" (assets.verify). */
+    readonly code?: string;
+    /** Seconds to wait before retrying, from a 429's `retry_after` or
+     *  `Retry-After`. */
+    readonly retryAfter?: number;
+    constructor(statusCode: number, type: string, message: string, code?: string, retryAfter?: number);
 }
 //# sourceMappingURL=errors.d.ts.map

@@ -403,6 +403,22 @@ const e = await client.embeddings.create("text-embedding-3-small", { input: ["al
 
 `VideoGenerateParams` covers keyframes (`first_frame_url`, `last_frame_url`), reference inputs, source video, image and audio drivers, `service_tier: "flex"`, and more. Every `*_url` accepts `https://` or a `data:` URI (`encodeImageUrl(bytes)`).
 
+### Faces in Seedance references
+
+Seedance refuses a reference picture with a realistic face. For users the platform has enabled it for, `client.assets.verify(url)` puts the picture into the platform's Seedance asset library (Volcengine reviews it in a few seconds) and returns an `asset://` URI that Seedance takes in the picture's place:
+
+```ts
+const me = await client.me();                       // { id, name, features }
+if (me.features.includes("seedance_asset_verify")) {
+  const v = await client.assets.verify(pictureUrl); // https:// or data: URI
+  // { status: "active", asset: "asset://asset-…", faces: 1 }  or  { status: "no_face", faces: 0 }
+  const ref = v.status === "active" ? v.asset : pictureUrl;
+  await client.video.generate("Seedance 2.5", { prompt: "…", reference_image_urls: [ref] });
+}
+```
+
+The library keeps the pictures used lately and drops the rest, so call `verify` again right before each Seedance call (a picture still held answers at once). Errors carry a `code`: `invalid_image` (under 300 px or over 6000 px a side, or width/height outside 0.4–2.5), `feature_not_enabled`, `rejected` (Volcengine's review refused it), `busy` (429; retry after `e.retryAfter` seconds).
+
 ## Realtime voice
 
 A full-duplex voice conversation: stream the microphone up, get transcripts, text and the spoken reply back as they happen, and interrupt the model mid-sentence.
@@ -519,7 +535,7 @@ The origin must be your app's own `https://<slug>.runapps.dev` or `http://localh
 try {
   await client.chat.create({ ... }, { signal: controller.signal });
 } catch (e) {
-  if (e instanceof APIError) console.error(e.statusCode, e.type, e.message);
+  if (e instanceof APIError) console.error(e.statusCode, e.type, e.code, e.message);
   else throw e;   // network errors are the fetch rejection
 }
 ```

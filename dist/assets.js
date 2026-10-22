@@ -1,0 +1,29 @@
+/**
+ * Seedance asset verification. Seedance refuses a reference picture with
+ * a realistic face; `verify` puts the picture into the platform's
+ * Seedance asset library (reviewed by Volcengine, a few seconds) and
+ * answers its `asset://` URI, which Seedance takes in the picture's
+ * place. Only for users the platform enabled it for: check
+ * `(await client.me()).features.includes("seedance_asset_verify")`.
+ *
+ * The library is a cache that evicts pictures not used lately, so verify
+ * again right before each Seedance call (a picture still held answers at
+ * once) rather than keeping an old asset.
+ *
+ * Errors are `APIError`s with a `code`: "invalid_image" (400: not a
+ * picture, or under 300 px / over 6000 px a side, or width/height
+ * outside 0.4–2.5), "feature_not_enabled" (403), "rejected" (422:
+ * Volcengine's review refused it), "busy" (429: retry after
+ * `retryAfter` seconds).
+ */
+export class AssetsService {
+    transport;
+    constructor(transport) {
+        this.transport = transport;
+    }
+    /** Verify a picture (an http(s) URL or a data: URI) for Seedance. */
+    async verify(url, init) {
+        return this.transport.postJSON("/v1/assets/verify", { url }, init);
+    }
+}
+//# sourceMappingURL=assets.js.map

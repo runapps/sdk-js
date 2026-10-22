@@ -247,17 +247,26 @@ export class Transport {
         const text = await resp.text();
         let type = "error";
         let message = text || resp.statusText;
+        let code;
+        let retryAfter;
         try {
             const parsed = JSON.parse(text);
             if (parsed.type)
                 type = parsed.type;
             if (parsed.message)
                 message = parsed.message;
+            if (typeof parsed.code === "string")
+                code = parsed.code;
+            if (typeof parsed.retry_after === "number")
+                retryAfter = parsed.retry_after;
         }
         catch {
             // Body wasn't JSON — fall back to raw text.
         }
-        return new APIError(resp.status, type, message);
+        const header = Number(resp.headers.get("Retry-After"));
+        if (retryAfter === undefined && header > 0)
+            retryAfter = header;
+        return new APIError(resp.status, type, message, code, retryAfter);
     }
 }
 /** The server's clock from a Date header, as ms since epoch. */

@@ -7,6 +7,7 @@ import { RealtimeService } from "./realtime.js";
 import { VideoService } from "./video.js";
 import { FilesService } from "./files.js";
 import { EmbeddingsService } from "./embeddings.js";
+import { AssetsService } from "./assets.js";
 import { BrowserAuth, type BrowserUser } from "./browser-auth.js";
 import { FilesRemote, SyncEngine, type SyncOptions, type SyncState } from "./sync/index.js";
 import { SDKEvents } from "./events.js";
@@ -156,6 +157,9 @@ export class RunApps {
   readonly embeddings: EmbeddingsService;
   /** Realtime voice sessions over WebSocket — see `RealtimeService.connect`. */
   readonly realtime: RealtimeService;
+  /** Seedance asset verification (a gated feature) — see `AssetsService`. */
+  readonly assets: AssetsService;
+  private readonly transport: Transport;
 
   /**
    * Browser auth helper, populated only when `authProvider: "runapps"`.
@@ -267,6 +271,8 @@ export class RunApps {
     this.files = new FilesService(transport, options.project, this.events, options.filesBase);
     this.embeddings = new EmbeddingsService(transport, this.events);
     this.realtime = new RealtimeService(transport, this.events);
+    this.assets = new AssetsService(transport);
+    this.transport = transport;
 
     // Sync: an app on RunApps gets it unless it says no. It
     // stores under the signed-in user, so only browser sign-in mode has
@@ -306,8 +312,25 @@ export class RunApps {
     this.auth?.signOut();
   }
 
+  /**
+   * The caller as the platform sees them, with the gated features the
+   * platform enabled for them (e.g. "seedance_asset_verify"), so an app
+   * shows a gated control only to those who have it.
+   */
+  me(init?: { signal?: AbortSignal }): Promise<Me> {
+    return this.transport.getJSON<Me>("/v1/me", init);
+  }
+
   /** Currently-authenticated user (runapps auth mode), or null. */
   get user(): BrowserUser | null {
     return this.auth?.user ?? null;
   }
+}
+
+/** `client.me()`: the signed-in user and their gated features. */
+export interface Me {
+  id: string;
+  name: string;
+  /** Feature names the platform enabled for this user. */
+  features: string[];
 }

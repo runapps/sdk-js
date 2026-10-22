@@ -6,6 +6,7 @@ import { RealtimeService } from "./realtime.js";
 import { VideoService } from "./video.js";
 import { FilesService } from "./files.js";
 import { EmbeddingsService } from "./embeddings.js";
+import { AssetsService } from "./assets.js";
 import { BrowserAuth, type BrowserUser } from "./browser-auth.js";
 import { type SyncOptions, type SyncState } from "./sync/index.js";
 import { SDKEvents } from "./events.js";
@@ -145,6 +146,9 @@ export declare class RunApps {
     readonly embeddings: EmbeddingsService;
     /** Realtime voice sessions over WebSocket — see `RealtimeService.connect`. */
     readonly realtime: RealtimeService;
+    /** Seedance asset verification (a gated feature) — see `AssetsService`. */
+    readonly assets: AssetsService;
+    private readonly transport;
     /**
      * Browser auth helper, populated only when `authProvider: "runapps"`.
      * Use `client.signIn()` and `client.user` for the common cases; the
@@ -190,7 +194,22 @@ export declare class RunApps {
      * No-op in static auth mode or in Node.
      */
     signOut(): void;
+    /**
+     * The caller as the platform sees them, with the gated features the
+     * platform enabled for them (e.g. "seedance_asset_verify"), so an app
+     * shows a gated control only to those who have it.
+     */
+    me(init?: {
+        signal?: AbortSignal;
+    }): Promise<Me>;
     /** Currently-authenticated user (runapps auth mode), or null. */
     get user(): BrowserUser | null;
+}
+/** `client.me()`: the signed-in user and their gated features. */
+export interface Me {
+    id: string;
+    name: string;
+    /** Feature names the platform enabled for this user. */
+    features: string[];
 }
 //# sourceMappingURL=client.d.ts.map

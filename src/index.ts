@@ -157,6 +157,11 @@ export type {
 // Quotes: what a call would cost (video.quote, image.quote, audio.quoteSpeech)
 export type { Quote } from "./quote.js";
 
+// The caller and their gated features (client.me); Seedance asset verification
+export type { Me } from "./client.js";
+export type { AssetVerifyResult } from "./assets.js";
+export { AssetsService } from "./assets.js";
+
 // Media helpers (shared by image + video + chat-multimodal)
 export { encodeImageUrl, decodeMediaUrl } from "./media.js";
 
