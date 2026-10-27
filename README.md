@@ -356,6 +356,8 @@ button.onclick = () => client.apps.send(apps[0].slug, {
 
 If the other app is already open in a tab, that tab takes the files and the new tab says so; otherwise the new tab becomes the app.
 
+Links to paths are signed for 7 days. A `blob` has no link of its own, so it is first stored in your app's files under `handoff/<id>/`; the SDK deletes those once their link has expired (checked at most once a day while your app is open).
+
 **A "Send to…" in the same place in every app.** Rather than building the menu yourself:
 
 ```js

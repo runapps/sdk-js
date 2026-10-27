@@ -226,6 +226,12 @@ export declare class AppsService {
     private received;
     /** Drops inbox entries older than a week. */
     private prune;
+    /**
+     * Deletes what earlier sends stored under handoff/ once its link has
+     * expired: the receiving app has its own copy by then, or never will.
+     * At most once a day, and only in an app that has stored some.
+     */
+    private sweepSent;
     /** Links for the files to send; paths are signed, blobs stored first. */
     private prepare;
 }

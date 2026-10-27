@@ -100,6 +100,12 @@ const KEEP_MS = 7 * 24 * 3600 * 1000;
 /** How long sent links stay readable: long enough for a handoff that
  *  waits in the inbox until the app is next opened. */
 const SEND_LINK_SECONDS = 7 * 24 * 3600;
+/** Files a send stored under handoff/ (a blob has no link of its own)
+ *  are deleted once their link has expired. This key, in the sending
+ *  app's localStorage, is when that was last checked; it exists only
+ *  while some may be left. */
+const SWEEP_KEY = "runapps_handoff_sweep";
+const SWEEP_EVERY_MS = 24 * 3600 * 1000;
 
 /** The wire form of a handoff, in the inbox page's URL fragment. */
 export interface HandoffPayload {
@@ -274,7 +280,11 @@ export class AppsService {
     private readonly signedIn: () => boolean,
   ) {
     this.local = typeof location !== "undefined" && /\.localhost$/i.test(location.hostname);
-    if (typeof localStorage !== "undefined") this.prune();
+    if (typeof localStorage !== "undefined") {
+      this.prune();
+      // Off the start-up path; the token may only arrive with sign-in.
+      if (lsGet(SWEEP_KEY) !== null) setTimeout(() => void this.sweepSent(), 10_000);
+    }
   }
 
   /** This app's slug: its host's subdomain, else the `project` option. */
@@ -640,6 +650,36 @@ export class AppsService {
     }
   }
 
+  /**
+   * Deletes what earlier sends stored under handoff/ once its link has
+   * expired: the receiving app has its own copy by then, or never will.
+   * At most once a day, and only in an app that has stored some.
+   */
+  private async sweepSent(): Promise<void> {
+    const last = Number(lsGet(SWEEP_KEY) || 0);
+    if (!this.signedIn() || Date.now() - last < SWEEP_EVERY_MS) return;
+    lsSet(SWEEP_KEY, String(Date.now()));
+    try {
+      const cutoff = Date.now() - SEND_LINK_SECONDS * 1000 - 3600_000;
+      const old = new Set<string>();
+      let left = 0;
+      let cursor: string | undefined;
+      do {
+        const r = await this.files.list({ prefix: "handoff/", limit: 1000, ...(cursor ? { cursor } : {}) });
+        for (const f of r.files) {
+          const dir = f.path.split("/").slice(0, 2).join("/") + "/";
+          if (Date.parse(f.last_modified ?? "") < cutoff) old.add(dir);
+          else left++;
+        }
+        cursor = r.next_cursor;
+      } while (cursor);
+      for (const prefix of old) await this.files.deleteMany({ prefix });
+      if (!left) lsDel(SWEEP_KEY);
+    } catch (e) {
+      console.warn("[RunApps] clearing sent files failed", e);
+    }
+  }
+
   /** Links for the files to send; paths are signed, blobs stored first. */
   private async prepare(id: string, sources: HandoffSource[]): Promise<HandoffFile[]> {
     const out: HandoffFile[] = [];
@@ -651,6 +691,7 @@ export class AppsService {
       } else if ("blob" in s) {
         const name = s.name.replace(/[\\/]/g, "_") || "file";
         const obj = await this.files.put(`handoff/${id}/${name}`, s.blob);
+        if (lsGet(SWEEP_KEY) === null) lsSet(SWEEP_KEY, "0");
         out[i] = { url: "", name, type: s.type ?? s.blob.type ?? "", size: obj.size };
         toSign.push({ path: obj.path, i });
       } else {

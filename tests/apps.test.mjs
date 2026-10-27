@@ -201,3 +201,34 @@ test("dismiss removes an entry", () => {
   t.dismiss(id);
   assert.equal(t.waiting().length, 0);
 });
+
+test("files a send stored are deleted once their link has expired", async () => {
+  sharedBrowser();
+  const day = 24 * 3600 * 1000;
+  const at = (d) => new Date(Date.now() - d * day).toISOString();
+  let stored = [
+    { path: "handoff/old1/clip.mp4", last_modified: at(9) },
+    { path: "handoff/old1/cover.png", last_modified: at(9) },
+    { path: "handoff/new1/song.mp3", last_modified: at(1) },
+  ];
+  const deleted = [];
+  const files = {
+    async list() { return { files: stored }; },
+    async deleteMany({ prefix }) {
+      deleted.push(prefix);
+      stored = stored.filter((f) => !f.path.startsWith(prefix));
+      return { deleted: 1 };
+    },
+  };
+  const svc = new AppsService({}, files, "video-studio", () => true);
+  localStorage.setItem("runapps_handoff_sweep", "0");
+  await svc.sweepSent();
+  assert.deepEqual(deleted, ["handoff/old1/"]);
+  assert.notEqual(localStorage.getItem("runapps_handoff_sweep"), null); // new1 is still in use
+  await svc.sweepSent();
+  assert.deepEqual(deleted, ["handoff/old1/"]); // not again the same day
+  stored = [];
+  localStorage.setItem("runapps_handoff_sweep", "0");
+  await svc.sweepSent();
+  assert.equal(localStorage.getItem("runapps_handoff_sweep"), null); // nothing left to watch
+});
