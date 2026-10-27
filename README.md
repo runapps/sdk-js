@@ -356,17 +356,28 @@ button.onclick = () => client.apps.send(apps[0].slug, {
 
 If the other app is already open in a tab, that tab takes the files and the new tab says so; otherwise the new tab becomes the app.
 
-**Receiving.** Whatever other apps send, now or while your app was closed:
+**Receiving.** Nothing is taken without asking. With `confirm: true` the SDK asks the user first ("Video Studio sent you 1 file — Receive / Later / Ignore") and runs your handler only on Receive:
 
 ```js
 client.apps.onReceive(async (h) => {
   // h.from, h.action, h.files: [{ url, name, type, size }]
   const obj = await h.importTo("received/" + h.files[0].name);  // server-side copy
   addToDocument(obj);
+}, { confirm: true });
+```
+
+Or ask in your own UI, in the place it belongs, and answer from the handler: `"later"` (the user put it off — offered again the next time the app starts) or `"pass"` (not here, e.g. no document open in this tab — another open tab may take it). Anything else means taken.
+
+```js
+client.apps.onReceive(async (h) => {
+  if (!editorOpen) return "pass";
+  const choice = await myDialog(h);          // "add" | "later" | "ignore"
+  if (choice === "later") return "later";
+  if (choice === "add") await addToDocument(h);
 });
 ```
 
-Each handoff reaches one handler call, in one tab even when your app is open in several. It is forgotten once your handler returns; a handler that throws leaves it for later (another tab, the next start). `client.apps.waiting()` lists what is waiting without taking it — check it at start to skip a start screen when the app was opened to receive files.
+Each handoff reaches one tab at a time, even when your app is open in several. `client.apps.waiting()` lists what is waiting without taking it — check it at start to skip a start screen when the app was opened to receive files — and `client.apps.dismiss(id)` drops one.
 
 ## Sync
 
@@ -600,7 +611,7 @@ Every call takes `{ signal }` for cancellation.
 | `client.realtime` | `connect` → session: `on`, `send`, `appendAudio`, `commitAudio`, `mute`, `unmute`, `say`, `cancelResponse`, `update`, `sendFunctionResult`, `close`, `closed` |
 | `client.video` | `generate`, `getStatus`, `wait`, `getContent` |
 | `client.embeddings` | `create` |
-| `client.apps` | `receivers`, `send`, `onReceive` (→ `importTo`, `blob`, `fromApp`), `waiting` |
+| `client.apps` | `receivers`, `send`, `onReceive` (→ `importTo`, `blob`, `fromApp`; option `confirm`), `waiting`, `dismiss` |
 
 Browser sign-in: `client.signIn()`, `client.signOut()`, `client.user`, `client.auth`.
 

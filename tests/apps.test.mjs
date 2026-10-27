@@ -164,3 +164,40 @@ test("a handoff nobody can take stays for later; a broken one is dropped", async
   assert.notEqual(localStorage.getItem("runapps_inbox:" + keep), null);
   assert.equal(localStorage.getItem("runapps_inbox:" + broken), null);
 });
+
+test("'later' keeps it, skips the other tabs now, and offers it at the next start", async () => {
+  sharedBrowser();
+  const id = "ffffffffffffffffffffffff";
+  const seen = [];
+  const a = tab(async () => { seen.push("a"); return "later"; });
+  const b = tab(async () => { seen.push("b"); });
+  arrive(id);
+  await a.deliver(id);            // live arrival in tab a: put off
+  await b.deliver(id);            // the storage event reaches tab b: not asked again
+  assert.deepEqual(seen, ["a"]);
+  assert.equal(b.waiting().length, 1);
+  await b.deliver(id, true);      // tab b starting up: offered again, taken
+  assert.deepEqual(seen, ["a", "b"]);
+  assert.equal(b.waiting().length, 0);
+});
+
+test("'pass' leaves it for another tab without putting it off", async () => {
+  sharedBrowser();
+  const id = "gggggggggggggggggggggggg";
+  const seen = [];
+  const list = tab(async () => { seen.push("list"); return "pass"; });
+  const editor = tab(async () => { seen.push("editor"); });
+  arrive(id);
+  await Promise.all([list.deliver(id), editor.deliver(id)]);
+  assert.deepEqual(seen, ["list", "editor"]);
+  assert.equal(editor.waiting().length, 0);
+});
+
+test("dismiss removes an entry", () => {
+  sharedBrowser();
+  const id = "hhhhhhhhhhhhhhhhhhhhhhhh";
+  arrive(id);
+  const t = new AppsService({}, {}, "video-studio", () => true);
+  t.dismiss(id);
+  assert.equal(t.waiting().length, 0);
+});

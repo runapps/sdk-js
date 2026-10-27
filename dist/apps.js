@@ -91,6 +91,29 @@ function newId() {
     crypto.getRandomValues(b);
     return Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
 }
+/** Blobs an app already shows a Send to… button for (sendButton), so the
+ *  after-download card (watchDownloads) does not offer them twice. */
+const offeredBlobs = new WeakSet();
+/** File type from a name, for blobs that carry none. */
+const EXT_TYPES = {
+    png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp", gif: "image/gif", svg: "image/svg+xml",
+    avif: "image/avif", bmp: "image/bmp", tif: "image/tiff", tiff: "image/tiff", psd: "image/vnd.adobe.photoshop",
+    mp4: "video/mp4", webm: "video/webm", mov: "video/quicktime", mp3: "audio/mpeg", wav: "audio/wav", ogg: "audio/ogg",
+    m4a: "audio/mp4", flac: "audio/flac", aiff: "audio/aiff", mid: "audio/midi", midi: "audio/midi",
+    pdf: "application/pdf", csv: "text/csv", tsv: "text/tab-separated-values", txt: "text/plain", md: "text/markdown",
+    html: "text/html", json: "application/json", zip: "application/zip", ics: "text/calendar", vcf: "text/vcard",
+    docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ods: "application/vnd.oasis.opendocument.spreadsheet", dxf: "application/dxf",
+    step: "model/step", stp: "model/step", stl: "model/stl", glb: "model/gltf-binary", gltf: "model/gltf+json",
+};
+function typeOf(blob, name) {
+    const t = (blob.type || "").split(";")[0].trim();
+    if (t && t !== "application/octet-stream")
+        return t;
+    return EXT_TYPES[/\.([a-z0-9]+)$/i.exec(name)?.[1]?.toLowerCase() ?? ""] ?? t;
+}
 // ── Browser storage helpers ─────────────────────────────────────────────
 function lsGet(key) {
     try {
@@ -99,6 +122,12 @@ function lsGet(key) {
     catch {
         return null;
     }
+}
+function lsSet(key, value) {
+    try {
+        localStorage.setItem(key, value);
+    }
+    catch { /* full or blocked */ }
 }
 function lsDel(key) {
     try {
@@ -147,6 +176,7 @@ export class AppsService {
     handlers = [];
     delivering = new Set();
     listening = false;
+    watchingDownloads = false;
     constructor(transport, files, project, signedIn) {
         this.transport = transport;
         this.files = files;
@@ -218,18 +248,192 @@ export class AppsService {
     /**
      * Receive what other apps send this one: each handoff once, whether it
      * arrives now (in this tab or, with the app open in several tabs, in one
-     * of them) or arrived while the app was closed. A handoff is forgotten
-     * once a handler returns (or its promise resolves); a handler that throws
-     * leaves it for later (another tab, the next start, or a new handler).
+     * of them) or arrived while the app was closed. Nothing is taken without
+     * the app saying so: with `confirm: true` the SDK asks the user first;
+     * otherwise the handler decides, and may answer "later" (the user put it
+     * off: offered again at the next start) or "pass" (not here: another
+     * tab may take it). A handoff leaves the inbox once a handler is done
+     * with it; a handler that throws leaves it for later too.
      */
-    onReceive(handler) {
-        this.handlers.push(handler);
+    onReceive(handler, opts = {}) {
+        const fn = opts.confirm
+            ? async (h) => {
+                const choice = await confirmReceive(h);
+                if (choice === "later")
+                    return "later";
+                if (choice === "ignore")
+                    return undefined;
+                return handler(h);
+            }
+            : handler;
+        this.handlers.push(fn);
         this.listen();
         if (typeof localStorage !== "undefined") {
+            // What waited — including what the user put off last time.
             queueMicrotask(() => { for (const k of lsKeys(INBOX_PREFIX))
-                void this.deliver(k.slice(INBOX_PREFIX.length)); });
+                void this.deliver(k.slice(INBOX_PREFIX.length), true); });
         }
-        return () => { this.handlers = this.handlers.filter((h) => h !== handler); };
+        return () => { this.handlers = this.handlers.filter((h) => h !== fn); };
+    }
+    /**
+     * The standard "Send to…" button, for an app's export panel (next to its
+     * Download / Save buttons) — every app puts the same control in the same
+     * kind of place. It lists the apps that take `type`, stays hidden when
+     * there are none, and sends from the click (a new tab opens there).
+     * `files` may be a function, read at click time, for a panel whose file
+     * changes; it must return synchronously (the click must not await).
+     * Pass `className` to look like the app's own buttons.
+     */
+    sendButton(opts) {
+        const zh = /^zh/i.test(document.documentElement.lang || navigator.language || "");
+        if (Array.isArray(opts.files))
+            for (const f of opts.files)
+                if ("blob" in f)
+                    offeredBlobs.add(f.blob);
+        const wrap = document.createElement("span");
+        wrap.style.cssText = "position:relative;display:inline-flex";
+        wrap.hidden = true;
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = opts.className ?? "";
+        btn.textContent = opts.label ?? (zh ? "发送到…" : "Send to…");
+        btn.setAttribute("aria-haspopup", "menu");
+        if (!opts.className)
+            btn.style.cssText = "font:inherit;padding:6px 12px;border-radius:8px;border:1px solid rgba(127,127,127,.35);background:transparent;color:inherit;cursor:pointer";
+        wrap.append(btn);
+        let apps = [];
+        void this.receivers({ type: opts.type.split(";")[0] }).then((list) => {
+            apps = list;
+            wrap.hidden = list.length === 0;
+        }).catch(() => { });
+        btn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            if (!apps.length)
+                return;
+            showSendMenu(btn, apps, zh, (app, action) => {
+                const files = typeof opts.files === "function" ? opts.files() : opts.files;
+                this.send(app.slug, { files, action: opts.action ?? action }).then(() => opts.onSent?.(app), (err) => {
+                    if (opts.onError)
+                        opts.onError(err);
+                    else
+                        console.warn("RunApps: send failed", err);
+                });
+            });
+        });
+        return wrap;
+    }
+    /**
+     * After the app downloads a file (an export, a "Save to device"), offer
+     * to send it on: a small card in the corner — "<file> · Send to… · ×" —
+     * the same in every app, shown only when some app takes the file's type
+     * and not for a file the app already shows a sendButton for. It notices
+     * downloads made the usual way (a link with `download` to a blob: or
+     * data: URL, clicked or dispatched), so an app needs only this call.
+     */
+    watchDownloads() {
+        if (this.watchingDownloads || typeof window === "undefined" || typeof HTMLAnchorElement === "undefined")
+            return;
+        this.watchingDownloads = true;
+        const blobs = new Map();
+        const create = URL.createObjectURL.bind(URL);
+        const revoke = URL.revokeObjectURL.bind(URL);
+        URL.createObjectURL = (obj) => {
+            const u = create(obj);
+            if (obj instanceof Blob)
+                blobs.set(u, obj);
+            return u;
+        };
+        URL.revokeObjectURL = (u) => {
+            setTimeout(() => blobs.delete(u), 60_000);
+            revoke(u);
+        };
+        const seen = new WeakSet();
+        const offer = (a) => {
+            const name = a.download;
+            if (!name || !a.href)
+                return;
+            const fromBlob = blobs.get(a.href);
+            const got = fromBlob
+                ? Promise.resolve(fromBlob)
+                : a.href.startsWith("data:") ? fetch(a.href).then((r) => r.blob()) : null;
+            void got?.then((blob) => {
+                if (seen.has(blob) || offeredBlobs.has(blob))
+                    return;
+                seen.add(blob);
+                this.showSendCard(blob, name);
+            }).catch(() => { });
+        };
+        const click = HTMLAnchorElement.prototype.click;
+        HTMLAnchorElement.prototype.click = function () {
+            offer(this);
+            return click.call(this);
+        };
+        const dispatch = EventTarget.prototype.dispatchEvent;
+        HTMLAnchorElement.prototype.dispatchEvent = function (ev) {
+            if (ev.type === "click")
+                offer(this);
+            return dispatch.call(this, ev);
+        };
+        document.addEventListener("click", (e) => {
+            const a = e.target?.closest?.("a[download]");
+            if (a && !e.isTrusted)
+                return; // a synthetic click on an attached link went through dispatchEvent above
+            if (a)
+                offer(a);
+        }, true);
+    }
+    /** The after-download card (see watchDownloads). */
+    showSendCard(blob, name) {
+        const type = typeOf(blob, name);
+        if (!type)
+            return;
+        const button = this.sendButton({ type, files: [{ blob, name, type }], onSent: () => close() });
+        // sendButton marked the blob; this card is the offer for it.
+        const zh = /^zh/i.test(document.documentElement.lang || navigator.language || "");
+        document.querySelector("[data-runapps-sendcard]")?.remove();
+        const card = document.createElement("div");
+        card.setAttribute("data-runapps-sendcard", "");
+        card.setAttribute("role", "status");
+        card.style.cssText = [
+            "position:fixed", "right:16px", "bottom:16px", "z-index:2147483646", "display:flex", "align-items:center", "gap:10px",
+            "max-width:min(420px,calc(100vw - 32px))", "padding:10px 10px 10px 14px", "border-radius:12px",
+            "border:1px solid rgba(127,127,127,.3)", "box-shadow:0 10px 30px rgba(0,0,0,.2)", "color-scheme:light dark",
+            "background:Canvas", "color:CanvasText", "font:13px/1.4 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif",
+        ].join(";");
+        card.hidden = true;
+        const label = document.createElement("span");
+        label.style.cssText = "min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;opacity:.85";
+        label.textContent = (zh ? "已导出 " : "Exported ") + name;
+        const x = document.createElement("button");
+        x.type = "button";
+        x.textContent = "×";
+        x.setAttribute("aria-label", zh ? "关闭" : "Close");
+        x.style.cssText = "border:0;background:none;color:inherit;font:18px/1 inherit;cursor:pointer;opacity:.6;padding:2px 6px";
+        x.addEventListener("click", () => close());
+        card.append(label, button, x);
+        const host = [...document.querySelectorAll("dialog[open]")].filter((d) => { try {
+            return d.matches(":modal");
+        }
+        catch {
+            return false;
+        } }).pop() || document.body;
+        host.append(card);
+        // Shown once the button knows some app takes the type (it unhides).
+        const reveal = new MutationObserver(() => { if (!button.hidden) {
+            card.hidden = false;
+            reveal.disconnect();
+        } });
+        reveal.observe(button, { attributes: true, attributeFilter: ["hidden"] });
+        const timer = setTimeout(() => close(), 20_000);
+        function close() {
+            clearTimeout(timer);
+            reveal.disconnect();
+            card.remove();
+        }
+    }
+    /** Removes a handoff from the inbox without taking it. */
+    dismiss(id) {
+        lsDel(INBOX_PREFIX + id);
     }
     /** Handoffs waiting for this app (sent while it was closed, or not yet
      *  taken), without taking them. An app checks it at start, to skip its
@@ -273,36 +477,50 @@ export class AppsService {
      * — another tab may have taken it — and only a tab whose handlers all
      * succeed removes it.
      */
-    async deliver(id) {
+    async deliver(id, sweep = false) {
         if (!this.handlers.length || this.delivering.has(id) || !lsGet(INBOX_PREFIX + id))
             return;
         this.delivering.add(id);
         try {
-            await withLock(INBOX_PREFIX + id, () => this.deliverLocked(id));
+            await withLock(INBOX_PREFIX + id, () => this.deliverLocked(id, sweep));
         }
         finally {
             this.delivering.delete(id);
         }
     }
-    async deliverLocked(id) {
+    /** `sweep`: the start-up pass, which also offers what was put off;
+     *  live arrivals skip it, so "Later" in one tab is not asked in the
+     *  next one. */
+    async deliverLocked(id, sweep) {
         const raw = lsGet(INBOX_PREFIX + id);
         if (!raw)
             return; // another tab took it
+        let entry = null;
         let p = null;
         try {
-            p = parseHandoffPayload(JSON.parse(raw)?.payload, this.local);
+            entry = JSON.parse(raw);
+            p = parseHandoffPayload(entry?.payload, this.local);
         }
         catch {
             p = null;
         }
-        if (!p || p.id !== id) {
+        if (!p || p.id !== id || !entry) {
             lsDel(INBOX_PREFIX + id);
             return;
         }
+        if (entry.deferred_at && !sweep)
+            return;
         const h = this.received(p);
         try {
-            for (const fn of this.handlers)
-                await fn(h);
+            for (const fn of this.handlers) {
+                const answer = await fn(h);
+                if (answer === "later") {
+                    lsSet(INBOX_PREFIX + id, JSON.stringify({ ...entry, deferred_at: Date.now() }));
+                    return;
+                }
+                if (answer === "pass")
+                    return;
+            }
             lsDel(INBOX_PREFIX + id);
         }
         catch (e) {
@@ -386,6 +604,128 @@ export class AppsService {
         }
         return out;
     }
+}
+/**
+ * The menu behind sendButton: the apps, each "Edit in …" / "Open in …"
+ * with its icon, under (or above) the button. It goes inside the topmost
+ * open modal <dialog> when there is one (the browser's top layer would
+ * cover it otherwise) and closes on a pick, Escape or a click elsewhere.
+ */
+function showSendMenu(anchor, apps, zh, pick) {
+    document.querySelector("[data-runapps-sendmenu]")?.remove();
+    const menu = document.createElement("div");
+    menu.setAttribute("data-runapps-sendmenu", "");
+    menu.setAttribute("role", "menu");
+    menu.style.cssText = [
+        "position:fixed", "z-index:2147483647", "min-width:220px", "max-height:300px", "overflow:auto", "padding:4px",
+        "border:1px solid rgba(127,127,127,.3)", "border-radius:10px", "box-shadow:0 10px 30px rgba(0,0,0,.22)",
+        "color-scheme:light dark", "background:Canvas", "color:CanvasText",
+        "font:13px/1.4 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif",
+    ].join(";");
+    for (const app of apps) {
+        const action = app.actions.includes("edit") ? "edit" : "open";
+        const item = document.createElement("button");
+        item.type = "button";
+        item.setAttribute("role", "menuitem");
+        item.style.cssText = "display:flex;align-items:center;gap:8px;width:100%;padding:7px 10px;border:0;border-radius:7px;background:none;color:inherit;font:inherit;text-align:left;cursor:pointer";
+        item.addEventListener("mouseenter", () => { item.style.background = "rgba(127,127,127,.14)"; });
+        item.addEventListener("mouseleave", () => { item.style.background = "none"; });
+        if (app.icon_url) {
+            const img = document.createElement("img");
+            img.src = app.icon_url;
+            img.alt = "";
+            img.style.cssText = "width:18px;height:18px;border-radius:4px;object-fit:cover;flex:none";
+            item.append(img);
+        }
+        const text = document.createElement("span");
+        text.textContent = action === "edit"
+            ? (zh ? `用 ${app.name} 编辑` : `Edit in ${app.name}`)
+            : (zh ? `在 ${app.name} 中打开` : `Open in ${app.name}`);
+        item.append(text);
+        item.addEventListener("click", (e) => { e.stopPropagation(); close(); pick(app, action); });
+        menu.append(item);
+    }
+    const host = [...document.querySelectorAll("dialog[open]")].filter((d) => { try {
+        return d.matches(":modal");
+    }
+    catch {
+        return false;
+    } }).pop() || document.body;
+    host.append(menu);
+    const r = anchor.getBoundingClientRect();
+    const h = menu.offsetHeight;
+    const below = r.bottom + 6 + h <= window.innerHeight;
+    menu.style.top = `${below ? r.bottom + 6 : Math.max(8, r.top - 6 - h)}px`;
+    menu.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - menu.offsetWidth - 8))}px`;
+    const onDoc = (e) => { if (!menu.contains(e.target))
+        close(); };
+    const onKey = (e) => { if (e.key === "Escape") {
+        e.stopPropagation();
+        close();
+    } };
+    function close() {
+        menu.remove();
+        document.removeEventListener("pointerdown", onDoc, true);
+        document.removeEventListener("keydown", onKey, true);
+    }
+    setTimeout(() => {
+        document.addEventListener("pointerdown", onDoc, true);
+        document.addEventListener("keydown", onKey, true);
+    }, 0);
+}
+/**
+ * The SDK's own "another app sent you files" dialog, for apps that do not
+ * ask in their own UI: Receive / Later / Ignore. A modal <dialog>, so it
+ * sits above the app's own modals (the browser's top layer); Escape and
+ * closing it mean Later. Words follow the page's language (zh or en).
+ */
+async function confirmReceive(h) {
+    if (typeof document === "undefined" || typeof HTMLDialogElement === "undefined")
+        return "receive";
+    const zh = /^zh/i.test(document.documentElement.lang || navigator.language || "");
+    const from = (await h.fromApp().catch(() => null))?.name || h.from;
+    const n = h.files.length;
+    const t = zh
+        ? { title: `${from} 发来 ${n} 个文件`, receive: "接收", later: "稍后", ignore: "忽略" }
+        : { title: `${from} sent you ${n} file${n === 1 ? "" : "s"}`, receive: "Receive", later: "Later", ignore: "Ignore" };
+    const names = h.files.slice(0, 3).map((f) => f.name).join("\n") + (n > 3 ? (zh ? `\n…等 ${n} 个` : `\n… ${n} in all`) : "");
+    const d = document.createElement("dialog");
+    d.setAttribute("style", [
+        "border:1px solid rgba(127,127,127,.3)", "border-radius:12px", "padding:18px 18px 14px", "width:min(360px,calc(100vw - 32px))",
+        "font:14px/1.45 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif", "color-scheme:light dark",
+        "color:CanvasText", "background:Canvas", "box-shadow:0 12px 40px rgba(0,0,0,.25)",
+    ].join(";"));
+    const title = document.createElement("div");
+    title.textContent = t.title;
+    title.setAttribute("style", "font-weight:600;font-size:15px;margin-bottom:6px");
+    const list = document.createElement("div");
+    list.textContent = names;
+    list.setAttribute("style", "white-space:pre-line;opacity:.75;font-size:13px;margin-bottom:14px;word-break:break-all");
+    const row = document.createElement("div");
+    row.setAttribute("style", "display:flex;justify-content:flex-end;gap:8px");
+    const button = (label, value, primary = false) => {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.textContent = label;
+        b.value = value;
+        b.setAttribute("style", "font:inherit;padding:6px 14px;border-radius:8px;cursor:pointer;" + (primary
+            ? "border:0;background:#2563eb;color:#fff"
+            : "border:1px solid rgba(127,127,127,.35);background:transparent;color:inherit"));
+        b.addEventListener("click", () => d.close(value));
+        return b;
+    };
+    row.append(button(t.ignore, "ignore"), button(t.later, "later"), button(t.receive, "receive", true));
+    d.append(title, list, row);
+    document.body.append(d);
+    return new Promise((resolve) => {
+        d.addEventListener("close", () => {
+            const v = d.returnValue;
+            d.remove();
+            resolve(v === "receive" || v === "ignore" ? v : "later");
+        }, { once: true });
+        d.showModal();
+        row.lastElementChild?.focus();
+    });
 }
 /** Runs fn holding the origin-wide Web Lock `name` (one tab at a time);
  *  without Web Locks (old browsers, Node) it just runs fn. */

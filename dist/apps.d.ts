@@ -40,6 +40,22 @@ export interface SendOptions {
     /** "edit" (default) or "open": how the receiver is asked to treat it. */
     action?: HandoffAction;
 }
+/**
+ * What a receive handler may answer besides doing the work:
+ *  - `"later"`: the user put it off. It stays in the inbox and is offered
+ *    again the next time the app starts (not to the other tabs now).
+ *  - `"pass"`: not here (e.g. no document open in this tab). It stays, and
+ *    another open tab of the app may take it.
+ * Returning anything else (or nothing) means taken: it leaves the inbox.
+ */
+export type ReceiveAnswer = "later" | "pass" | void | undefined | unknown;
+export interface ReceiveOptions {
+    /** Ask the user first, in a small dialog the SDK shows ("<app> sent you
+     *  2 files — Receive / Later / Ignore"); the handler runs only on
+     *  Receive. Apps that ask in their own UI leave this off and answer
+     *  "later" from the handler. */
+    confirm?: boolean;
+}
 /** Files another app sent this one (`client.apps.onReceive`). */
 export interface ReceivedHandoff {
     id: string;
@@ -109,6 +125,7 @@ export declare class AppsService {
     private handlers;
     private delivering;
     private listening;
+    private watchingDownloads;
     constructor(transport: Transport, files: FilesService, project: string | undefined, signedIn: () => boolean);
     /** This app's slug: its host's subdomain, else the `project` option. */
     get self(): string;
@@ -136,11 +153,45 @@ export declare class AppsService {
     /**
      * Receive what other apps send this one: each handoff once, whether it
      * arrives now (in this tab or, with the app open in several tabs, in one
-     * of them) or arrived while the app was closed. A handoff is forgotten
-     * once a handler returns (or its promise resolves); a handler that throws
-     * leaves it for later (another tab, the next start, or a new handler).
+     * of them) or arrived while the app was closed. Nothing is taken without
+     * the app saying so: with `confirm: true` the SDK asks the user first;
+     * otherwise the handler decides, and may answer "later" (the user put it
+     * off: offered again at the next start) or "pass" (not here: another
+     * tab may take it). A handoff leaves the inbox once a handler is done
+     * with it; a handler that throws leaves it for later too.
      */
-    onReceive(handler: (h: ReceivedHandoff) => unknown): () => void;
+    onReceive(handler: (h: ReceivedHandoff) => ReceiveAnswer, opts?: ReceiveOptions): () => void;
+    /**
+     * The standard "Send to…" button, for an app's export panel (next to its
+     * Download / Save buttons) — every app puts the same control in the same
+     * kind of place. It lists the apps that take `type`, stays hidden when
+     * there are none, and sends from the click (a new tab opens there).
+     * `files` may be a function, read at click time, for a panel whose file
+     * changes; it must return synchronously (the click must not await).
+     * Pass `className` to look like the app's own buttons.
+     */
+    sendButton(opts: {
+        type: string;
+        files: HandoffSource[] | (() => HandoffSource[]);
+        action?: HandoffAction;
+        className?: string;
+        label?: string;
+        onSent?: (app: ReceiverApp) => void;
+        onError?: (e: unknown) => void;
+    }): HTMLElement;
+    /**
+     * After the app downloads a file (an export, a "Save to device"), offer
+     * to send it on: a small card in the corner — "<file> · Send to… · ×" —
+     * the same in every app, shown only when some app takes the file's type
+     * and not for a file the app already shows a sendButton for. It notices
+     * downloads made the usual way (a link with `download` to a blob: or
+     * data: URL, clicked or dispatched), so an app needs only this call.
+     */
+    watchDownloads(): void;
+    /** The after-download card (see watchDownloads). */
+    private showSendCard;
+    /** Removes a handoff from the inbox without taking it. */
+    dismiss(id: string): void;
     /** Handoffs waiting for this app (sent while it was closed, or not yet
      *  taken), without taking them. An app checks it at start, to skip its
      *  start screen or last document when it was opened to receive files. */
@@ -160,6 +211,9 @@ export declare class AppsService {
      * succeed removes it.
      */
     private deliver;
+    /** `sweep`: the start-up pass, which also offers what was put off;
+     *  live arrivals skip it, so "Later" in one tab is not asked in the
+     *  next one. */
     private deliverLocked;
     private received;
     /** Drops inbox entries older than a week. */

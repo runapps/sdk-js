@@ -49,6 +49,8 @@ export {
   type HandoffSource,
   type HandoffPayload,
   type ReceivedHandoff,
+  type ReceiveAnswer,
+  type ReceiveOptions,
   type ReceiverApp,
   type SendOptions,
 } from "./apps.js";
