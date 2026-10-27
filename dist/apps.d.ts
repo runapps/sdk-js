@@ -204,7 +204,20 @@ export declare class AppsService {
         context: unknown;
         at: number;
     }[];
+    /**
+     * Hands a stored result to the handlers. Every open tab of the app hears
+     * the same `storage` event, so tabs take turns under a lock named after
+     * the handoff (Web Locks, shared by the origin's tabs): the one holding
+     * it reads the result again — another tab may have taken it meanwhile —
+     * and only a tab whose handlers all succeed removes it. A tab whose
+     * handler throws (e.g. the canvas project the result belongs to is not
+     * the one open there) releases the lock and the next tab tries.
+     */
+    /** Whether a handoff this app sent is still waiting for its result
+     *  (false once any tab of the app has taken the result). */
+    isPending(id: string): boolean;
     private deliver;
+    private deliverLocked;
     /** Drops handoffs (sent or received) older than a week. */
     private prune;
     /** Signed links for the files to hand over; blobs are stored first. */

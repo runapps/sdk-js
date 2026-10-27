@@ -328,13 +328,38 @@ export class AppsService {
         }
         return out;
     }
+    /**
+     * Hands a stored result to the handlers. Every open tab of the app hears
+     * the same `storage` event, so tabs take turns under a lock named after
+     * the handoff (Web Locks, shared by the origin's tabs): the one holding
+     * it reads the result again — another tab may have taken it meanwhile —
+     * and only a tab whose handlers all succeed removes it. A tab whose
+     * handler throws (e.g. the canvas project the result belongs to is not
+     * the one open there) releases the lock and the next tab tries.
+     */
+    /** Whether a handoff this app sent is still waiting for its result
+     *  (false once any tab of the app has taken the result). */
+    isPending(id) {
+        return lsGet(PENDING_PREFIX + id) !== null;
+    }
     async deliver(id) {
         if (!this.resultHandlers.length || this.delivering.has(id))
             return;
+        if (!lsGet(RESULT_PREFIX + id) || !lsGet(PENDING_PREFIX + id))
+            return;
+        this.delivering.add(id);
+        try {
+            await withLock(PENDING_PREFIX + id, () => this.deliverLocked(id));
+        }
+        finally {
+            this.delivering.delete(id);
+        }
+    }
+    async deliverLocked(id) {
         const rawResult = lsGet(RESULT_PREFIX + id);
         const rawPending = lsGet(PENDING_PREFIX + id);
         if (!rawResult || !rawPending)
-            return;
+            return; // another tab took it
         let result = null;
         let pending = {};
         try {
@@ -348,12 +373,11 @@ export class AppsService {
             lsDel(RESULT_PREFIX + id);
             return;
         }
-        this.delivering.add(id);
+        const r = {
+            id, from: result.from, files: result.files, context: pending.context ?? null,
+            to: pending.to ?? result.from, action: pending.action ?? "edit",
+        };
         try {
-            const r = {
-                id, from: result.from, files: result.files, context: pending.context ?? null,
-                to: pending.to ?? result.from, action: pending.action ?? "edit",
-            };
             for (const h of this.resultHandlers)
                 await h(r);
             lsDel(RESULT_PREFIX + id);
@@ -361,9 +385,6 @@ export class AppsService {
         }
         catch (e) {
             console.warn("RunApps: handoff result handler failed; kept for next time", e);
-        }
-        finally {
-            this.delivering.delete(id);
         }
     }
     /** Drops handoffs (sent or received) older than a week. */
@@ -494,6 +515,14 @@ export class AppsService {
             },
         };
     }
+}
+/** Runs fn holding the origin-wide Web Lock `name` (one tab at a time);
+ *  without Web Locks (old browsers, Node) it just runs fn. */
+function withLock(name, fn) {
+    const locks = typeof navigator !== "undefined"
+        ? navigator.locks
+        : undefined;
+    return locks && typeof locks.request === "function" ? locks.request(name, fn) : fn();
 }
 /** Opens an empty window now, while the click's user activation lasts;
  *  null when blocked. */

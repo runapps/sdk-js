@@ -360,7 +360,7 @@ client.apps.onResult(async (r) => {
 });
 ```
 
-A result that arrives while your app is closed is kept and handed to `onResult` the next time the app starts. It is forgotten once your handler returns; a handler that throws gets it again next time.
+A result that arrives while your app is closed is kept and handed to `onResult` the next time the app starts. It is forgotten once your handler returns; a handler that throws gets it again next time. With the app open in several tabs, they take turns on a result and only one applies it: a tab whose handler throws (say, the document it belongs to isn't open there) passes it to the next. `isPending(id)` tells whether it is still waiting.
 
 **Receiving.** If your app was opened with files, `client.apps.incoming` holds them:
 
@@ -612,7 +612,7 @@ Every call takes `{ signal }` for cancellation.
 | `client.realtime` | `connect` → session: `on`, `send`, `appendAudio`, `commitAudio`, `mute`, `unmute`, `say`, `cancelResponse`, `update`, `sendFunctionResult`, `close`, `closed` |
 | `client.video` | `generate`, `getStatus`, `wait`, `getContent` |
 | `client.embeddings` | `create` |
-| `client.apps` | `receivers`, `send`, `onResult`, `pending`, `incoming` → `importTo`, `blob`, `markImported`, `fromApp`, `reply`, `dismiss` |
+| `client.apps` | `receivers`, `send`, `onResult`, `pending`, `isPending`, `incoming` → `importTo`, `blob`, `markImported`, `fromApp`, `reply`, `dismiss` |
 
 Browser sign-in: `client.signIn()`, `client.signOut()`, `client.user`, `client.auth`.
 
