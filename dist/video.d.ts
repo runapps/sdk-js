@@ -74,6 +74,14 @@ export interface VideoStatus {
     status: string;
     progress: number;
     video_url?: string;
+    /**
+     * Unix seconds when the video stops being available: the gateway keeps
+     * a finished video for 2 hours. To keep it, save it before then —
+     * `getContent(id)` then `client.files.put(path, data, { contentType })`.
+     * Absent when `video_url` lasts (the playground's copy in your storage)
+     * or is the provider's own URL, whose lifetime isn't known.
+     */
+    expires_at?: number;
     error?: string;
     /** Final frame as a separate image — populated when return_last_frame=true. */
     last_frame_url?: string;

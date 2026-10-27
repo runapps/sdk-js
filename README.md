@@ -401,6 +401,13 @@ const e = await client.embeddings.create("text-embedding-3-small", { input: ["al
 
 `client.video.quote`, `client.image.quote` and `client.audio.quoteSpeech` take the same arguments as the call and return `{ total_cost, note }`: what the signed-in user would be charged, fees included, without running it. Video is the one to quote: a 30 s 1080p Seedance clip costs dollars, and the price depends on resolution, duration and reference clips.
 
+A finished video is kept for 2 hours: `status.expires_at` (Unix seconds) is when `getContent` and `video_url` stop working. If the app needs the video later, save it before then:
+
+```ts
+const { data, contentType } = await client.video.getContent(task.id);
+const saved = await client.files.put(`videos/${task.id}.mp4`, data, { contentType }); // saved.url lasts
+```
+
 `VideoGenerateParams` covers keyframes (`first_frame_url`, `last_frame_url`), reference inputs, source video, image and audio drivers, `service_tier: "flex"`, and more. Every `*_url` accepts `https://` or a `data:` URI (`encodeImageUrl(bytes)`).
 
 ### Faces in Seedance references

@@ -60,6 +60,12 @@ export interface ImageGenerateParams {
  */
 export interface ImageResult {
   url: string;
+  /**
+   * Unix seconds when a hosted `url` (`…/v1/blobs/<id>`) stops working —
+   * such blobs last 30 minutes. Absent for `data:` URLs, which carry the
+   * bytes themselves.
+   */
+  expires_at?: number;
   revised_prompt?: string;
   size?: string;
   /**
