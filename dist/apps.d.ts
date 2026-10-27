@@ -176,6 +176,8 @@ export declare class AppsService {
         action?: HandoffAction;
         className?: string;
         label?: string;
+        /** A send icon before the label (default true), sized to the text. */
+        icon?: boolean;
         onSent?: (app: ReceiverApp) => void;
         onError?: (e: unknown) => void;
     }): HTMLElement;

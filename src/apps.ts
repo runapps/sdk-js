@@ -194,6 +194,9 @@ function newId(): string {
  *  after-download card (watchDownloads) does not offer them twice. */
 const offeredBlobs = new WeakSet<Blob>();
 
+/** The "Send to…" button's icon (a paper plane, 16 px, the text's colour). */
+const SEND_ICON = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex:none"><path d="M14.5 21.7a.5.5 0 0 0 .9 0l6.6-19.2a.5.5 0 0 0-.6-.6L2.2 8.5a.5.5 0 0 0 0 .9l8 3.2a2 2 0 0 1 1.1 1.1z"/><path d="m21.9 2.1-10.9 11"/></svg>';
+
 /** File type from a name, for blobs that carry none. */
 const EXT_TYPES: Record<string, string> = {
   png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp", gif: "image/gif", svg: "image/svg+xml",
@@ -370,25 +373,34 @@ export class AppsService {
     action?: HandoffAction;
     className?: string;
     label?: string;
+    /** A send icon before the label (default true), sized to the text. */
+    icon?: boolean;
     onSent?: (app: ReceiverApp) => void;
     onError?: (e: unknown) => void;
   }): HTMLElement {
     const zh = /^zh/i.test(document.documentElement.lang || navigator.language || "");
     if (Array.isArray(opts.files)) for (const f of opts.files) if ("blob" in f) offeredBlobs.add(f.blob);
+    // Hidden until some app takes the type. An inline display would beat
+    // the hidden attribute, so the display itself is switched too.
     const wrap = document.createElement("span");
-    wrap.style.cssText = "position:relative;display:inline-flex";
+    wrap.style.cssText = "position:relative;display:none";
     wrap.hidden = true;
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = opts.className ?? "";
-    btn.textContent = opts.label ?? (zh ? "发送到…" : "Send to…");
     btn.setAttribute("aria-haspopup", "menu");
     if (!opts.className) btn.style.cssText = "font:inherit;padding:6px 12px;border-radius:8px;border:1px solid rgba(127,127,127,.35);background:transparent;color:inherit;cursor:pointer";
+    btn.style.display = "inline-flex";
+    btn.style.alignItems = "center";
+    btn.style.gap = "6px";
+    if (opts.icon !== false) btn.insertAdjacentHTML("beforeend", SEND_ICON);
+    btn.append(opts.label ?? (zh ? "发送到…" : "Send to…"));
     wrap.append(btn);
     let apps: ReceiverApp[] = [];
     void this.receivers({ type: opts.type.split(";")[0]! }).then((list) => {
       apps = list;
       wrap.hidden = list.length === 0;
+      wrap.style.display = list.length ? "inline-flex" : "none";
     }).catch(() => {});
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -477,7 +489,7 @@ export class AppsService {
     card.setAttribute("data-runapps-sendcard", "");
     card.setAttribute("role", "status");
     card.style.cssText = [
-      "position:fixed", "right:16px", "bottom:16px", "z-index:2147483646", "display:flex", "align-items:center", "gap:10px",
+      "position:fixed", "right:16px", "bottom:16px", "z-index:2147483646", "display:none", "align-items:center", "gap:10px",
       "max-width:min(420px,calc(100vw - 32px))", "padding:10px 10px 10px 14px", "border-radius:12px",
       "border:1px solid rgba(127,127,127,.3)", "box-shadow:0 10px 30px rgba(0,0,0,.2)", "color-scheme:light dark",
       "background:Canvas", "color:CanvasText", "font:13px/1.4 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif",
@@ -495,8 +507,9 @@ export class AppsService {
     card.append(label, button, x);
     const host = [...document.querySelectorAll("dialog[open]")].filter((d) => { try { return d.matches(":modal"); } catch { return false; } }).pop() || document.body;
     host.append(card);
-    // Shown once the button knows some app takes the type (it unhides).
-    const reveal = new MutationObserver(() => { if (!button.hidden) { card.hidden = false; reveal.disconnect(); } });
+    // Shown once the button knows some app takes the type (it unhides);
+    // until then display:none, which the hidden attribute alone can't beat.
+    const reveal = new MutationObserver(() => { if (!button.hidden) { card.hidden = false; card.style.display = "flex"; reveal.disconnect(); } });
     reveal.observe(button, { attributes: true, attributeFilter: ["hidden"] });
     const timer = setTimeout(() => close(), 20_000);
     function close() {

@@ -2012,6 +2012,7 @@ function newId() {
   return Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
 }
 var offeredBlobs = /* @__PURE__ */ new WeakSet();
+var SEND_ICON = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex:none"><path d="M14.5 21.7a.5.5 0 0 0 .9 0l6.6-19.2a.5.5 0 0 0-.6-.6L2.2 8.5a.5.5 0 0 0 0 .9l8 3.2a2 2 0 0 1 1.1 1.1z"/><path d="m21.9 2.1-10.9 11"/></svg>';
 var EXT_TYPES = {
   png: "image/png",
   jpg: "image/jpeg",
@@ -2199,19 +2200,24 @@ var AppsService = class {
       for (const f of opts.files) if ("blob" in f) offeredBlobs.add(f.blob);
     }
     const wrap = document.createElement("span");
-    wrap.style.cssText = "position:relative;display:inline-flex";
+    wrap.style.cssText = "position:relative;display:none";
     wrap.hidden = true;
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = opts.className ?? "";
-    btn.textContent = opts.label ?? (zh ? "\u53D1\u9001\u5230\u2026" : "Send to\u2026");
     btn.setAttribute("aria-haspopup", "menu");
     if (!opts.className) btn.style.cssText = "font:inherit;padding:6px 12px;border-radius:8px;border:1px solid rgba(127,127,127,.35);background:transparent;color:inherit;cursor:pointer";
+    btn.style.display = "inline-flex";
+    btn.style.alignItems = "center";
+    btn.style.gap = "6px";
+    if (opts.icon !== false) btn.insertAdjacentHTML("beforeend", SEND_ICON);
+    btn.append(opts.label ?? (zh ? "\u53D1\u9001\u5230\u2026" : "Send to\u2026"));
     wrap.append(btn);
     let apps = [];
     void this.receivers({ type: opts.type.split(";")[0] }).then((list) => {
       apps = list;
       wrap.hidden = list.length === 0;
+      wrap.style.display = list.length ? "inline-flex" : "none";
     }).catch(() => {
     });
     btn.addEventListener("click", (e) => {
@@ -2301,7 +2307,7 @@ var AppsService = class {
       "right:16px",
       "bottom:16px",
       "z-index:2147483646",
-      "display:flex",
+      "display:none",
       "align-items:center",
       "gap:10px",
       "max-width:min(420px,calc(100vw - 32px))",
@@ -2336,6 +2342,7 @@ var AppsService = class {
     const reveal = new MutationObserver(() => {
       if (!button.hidden) {
         card.hidden = false;
+        card.style.display = "flex";
         reveal.disconnect();
       }
     });
