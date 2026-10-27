@@ -329,6 +329,57 @@ try {
 
 Paths are at most 900 bytes, and a single file is at most 200 MB.
 
+## Sending files to another app
+
+An app can hand files to another app on the platform — a canvas sends a clip to a video editor — and get the result back. The two apps never share storage: the files travel as signed links, and the receiving app copies them into its own.
+
+**Say what your app takes.** In `bundle.json` at the root of your zip:
+
+```json
+{ "receives": [
+    { "types": ["video/*"], "action": "edit", "reply": true },
+    { "types": ["video/*", "audio/*", "image/*"], "action": "open" } ] }
+```
+
+`types` are MIME types or `type/*`. `action` is `open` (show the file) or `edit` (work on it); `reply: true` means you send the result back. The platform reads this when you upload the bundle; the publish page shows what it found.
+
+**Sending.** List the apps that take a file, then hand it over from a click (it opens a new tab):
+
+```js
+const apps = await client.apps.receivers({ type: "video/mp4", action: "edit" });
+// [{ slug, name, icon_url, url, actions: ["edit", "open"], reply: true }]
+
+button.onclick = () => client.apps.send(apps[0].slug, {
+  files: [{ path: "clips/intro.mp4" }],   // or { blob, name } or { url, name }
+  context: { nodeId: "n42" },             // stays here; comes back with the result
+});
+
+client.apps.onResult(async (r) => {
+  // r.context is what you passed to send; r.files are signed links (24 h)
+  await client.files.putFromURL("clips/intro-edited.mp4", r.files[0].url);
+});
+```
+
+A result that arrives while your app is closed is kept and handed to `onResult` the next time the app starts. It is forgotten once your handler returns; a handler that throws gets it again next time.
+
+**Receiving.** If your app was opened with files, `client.apps.incoming` holds them:
+
+```js
+const inc = client.apps.incoming;   // null when opened normally
+if (inc && !inc.imported) {
+  const obj = await inc.importTo("received/" + inc.files[0].name);  // server-side copy
+  inc.markImported();               // a reload won't import it again
+  openInEditor(obj.path);
+}
+if (inc?.canReply) {
+  const { name } = await inc.fromApp();
+  sendBack.textContent = `Send back to ${name}`;
+  sendBack.onclick = () => inc.reply([{ blob: rendered, name: "edited.mp4" }]);  // from the click
+}
+```
+
+`reply` stores the result in your app's storage and opens a small window on the sender's site that delivers it and closes. Only a handoff the sender actually started can be answered.
+
 ## Sync
 
 RunApps Sync keeps the data an app stores in IndexedDB on every device the user signs in on, with no code for it. The SDK observes the databases the app opens, pushes committed writes a few seconds later, pulls other devices' changes whenever the page is opened, focused or comes back online, and shows the state on the badge. It is **on by default** in an app on RunApps (browser sign-in mode) and off for personal keys and Node.
@@ -561,6 +612,7 @@ Every call takes `{ signal }` for cancellation.
 | `client.realtime` | `connect` → session: `on`, `send`, `appendAudio`, `commitAudio`, `mute`, `unmute`, `say`, `cancelResponse`, `update`, `sendFunctionResult`, `close`, `closed` |
 | `client.video` | `generate`, `getStatus`, `wait`, `getContent` |
 | `client.embeddings` | `create` |
+| `client.apps` | `receivers`, `send`, `onResult`, `pending`, `incoming` → `importTo`, `blob`, `markImported`, `fromApp`, `reply`, `dismiss` |
 
 Browser sign-in: `client.signIn()`, `client.signOut()`, `client.user`, `client.auth`.
 

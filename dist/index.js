@@ -16,6 +16,8 @@ export { RunApps, RunApps as Client, RunApps as RunJobs } from "./client.js";
 export { SDKEvents, newRequestId, } from "./events.js";
 export { ActivityTracker, } from "./activity-tracker.js";
 export { BrowserAuth } from "./browser-auth.js";
+// App handoff between apps (client.apps).
+export { AppsService, encodeHandoff, decodeHandoff, parseHandoffPayload, parseResultPayload, appSlugOf, appOriginFrom, isAppOrigin, isFilesURL, } from "./apps.js";
 // RunApps Sync — on by default in apps; exported for status UIs and
 // for tests that drive the engine with their own storage.
 export { SyncEngine, FilesRemote, installIndexedDBHook, } from "./sync/index.js";

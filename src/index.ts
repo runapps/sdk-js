@@ -34,6 +34,27 @@ export {
   type ActivitySnapshot,
 } from "./activity-tracker.js";
 export { BrowserAuth, type BrowserAuthOptions, type BrowserUser } from "./browser-auth.js";
+// App handoff between apps (client.apps).
+export {
+  AppsService,
+  encodeHandoff,
+  decodeHandoff,
+  parseHandoffPayload,
+  parseResultPayload,
+  appSlugOf,
+  appOriginFrom,
+  isAppOrigin,
+  isFilesURL,
+  type HandoffAction,
+  type HandoffFile,
+  type HandoffSource,
+  type HandoffResult,
+  type HandoffPayload,
+  type ResultPayload,
+  type IncomingHandoff,
+  type ReceiverApp,
+  type SendOptions,
+} from "./apps.js";
 // RunApps Sync — on by default in apps; exported for status UIs and
 // for tests that drive the engine with their own storage.
 export {
