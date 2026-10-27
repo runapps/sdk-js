@@ -436,9 +436,9 @@ export class AppsService {
         ? Promise.resolve(fromBlob)
         : a.href.startsWith("data:") ? fetch(a.href).then((r) => r.blob()) : null;
       void got?.then((blob) => {
-        if (seen.has(blob) || offeredBlobs.has(blob)) return;
+        if (seen.has(blob)) return;
         seen.add(blob);
-        this.showSendCard(blob, name);
+        this.offer(blob, name);
       }).catch(() => {});
     };
     const click = HTMLAnchorElement.prototype.click;
@@ -458,8 +458,15 @@ export class AppsService {
     }, true);
   }
 
-  /** The after-download card (see watchDownloads). */
-  private showSendCard(blob: Blob, name: string): void {
+  /**
+   * Offer to send a file the app just made — saved to the user's storage,
+   * say, rather than downloaded: the same corner card watchDownloads shows
+   * after a download ("Exported <file> · Send to… · ×"), only when some
+   * app takes the type, and not for a file a sendButton already offers.
+   * Call it once the export has succeeded.
+   */
+  offer(blob: Blob, name: string): void {
+    if (typeof document === "undefined" || offeredBlobs.has(blob)) return;
     const type = typeOf(blob, name);
     if (!type) return;
     const button = this.sendButton({ type, files: [{ blob, name, type }], onSent: () => close() });

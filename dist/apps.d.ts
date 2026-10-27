@@ -188,8 +188,14 @@ export declare class AppsService {
      * data: URL, clicked or dispatched), so an app needs only this call.
      */
     watchDownloads(): void;
-    /** The after-download card (see watchDownloads). */
-    private showSendCard;
+    /**
+     * Offer to send a file the app just made — saved to the user's storage,
+     * say, rather than downloaded: the same corner card watchDownloads shows
+     * after a download ("Exported <file> · Send to… · ×"), only when some
+     * app takes the type, and not for a file a sendButton already offers.
+     * Call it once the export has succeeded.
+     */
+    offer(blob: Blob, name: string): void;
     /** Removes a handoff from the inbox without taking it. */
     dismiss(id: string): void;
     /** Handoffs waiting for this app (sent while it was closed, or not yet

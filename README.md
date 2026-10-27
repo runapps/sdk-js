@@ -356,6 +356,18 @@ button.onclick = () => client.apps.send(apps[0].slug, {
 
 If the other app is already open in a tab, that tab takes the files and the new tab says so; otherwise the new tab becomes the app.
 
+**A "Send to…" in the same place in every app.** Rather than building the menu yourself:
+
+```js
+// A button (hidden while no app takes the type) that opens a menu of the apps that do.
+exportPanel.append(client.apps.sendButton({ type: "audio/wav", files: [{ blob, name: "mix.wav" }] }));
+
+// After a file is saved somewhere the user doesn't see it (their storage), a corner card
+// "Exported mix.wav · Send to… · ×" — the same card watchDownloads() shows after every download.
+client.apps.offer(blob, "mix.wav");
+client.apps.watchDownloads();
+```
+
 **Receiving.** Nothing is taken without asking. With `confirm: true` the SDK asks the user first ("Video Studio sent you 1 file — Receive / Later / Ignore") and runs your handler only on Receive:
 
 ```js
@@ -611,7 +623,7 @@ Every call takes `{ signal }` for cancellation.
 | `client.realtime` | `connect` → session: `on`, `send`, `appendAudio`, `commitAudio`, `mute`, `unmute`, `say`, `cancelResponse`, `update`, `sendFunctionResult`, `close`, `closed` |
 | `client.video` | `generate`, `getStatus`, `wait`, `getContent` |
 | `client.embeddings` | `create` |
-| `client.apps` | `receivers`, `send`, `onReceive` (→ `importTo`, `blob`, `fromApp`; option `confirm`), `waiting`, `dismiss` |
+| `client.apps` | `receivers`, `send`, `onReceive` (→ `importTo`, `blob`, `fromApp`; option `confirm`), `waiting`, `dismiss`, `sendButton`, `offer`, `watchDownloads` |
 
 Browser sign-in: `client.signIn()`, `client.signOut()`, `client.user`, `client.auth`.
 
