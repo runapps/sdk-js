@@ -1,6 +1,6 @@
 import type { Transport } from "./transport.js";
-import type { FilesService } from "./files.js";
-/** What an app can be handed, as its bundle.json declares it. */
+import type { FileObject, FilesService } from "./files.js";
+/** How a sender words a send: "edit" (work on it) or "open" (show it). */
 export type HandoffAction = "open" | "edit";
 /** An app that takes a file type (`client.apps.receivers`). */
 export interface ReceiverApp {
@@ -11,18 +11,16 @@ export interface ReceiverApp {
     url: string;
     /** The actions it offers for the type: "edit", "open". */
     actions: HandoffAction[];
-    /** An edit sends its result back to the sender. */
-    reply: boolean;
 }
-/** A file in a handoff: a signed (or public) link and what it is. */
+/** A file in a handoff: a files-host link and what it is. */
 export interface HandoffFile {
     url: string;
     name: string;
     type: string;
     size?: number;
 }
-/** A file to hand over: a path in this app's storage, a Blob, or a URL
- *  on the files host this app already holds (a signed or public link). */
+/** A file to send: a path in this app's storage, a Blob, or a link on the
+ *  files host this app already holds (a signed or public link). */
 export type HandoffSource = {
     path: string;
     name?: string;
@@ -39,73 +37,33 @@ export type HandoffSource = {
 };
 export interface SendOptions {
     files: HandoffSource[];
-    /** "edit" (default) asks for the result back; "open" just hands over. */
+    /** "edit" (default) or "open": how the receiver is asked to treat it. */
     action?: HandoffAction;
-    /** Anything JSON the sender wants back with the result (e.g. which
-     *  canvas node the file came from). Stays in this app; not sent. */
-    context?: unknown;
 }
-/** A result sent back to this app (`client.apps.onResult`). */
-export interface HandoffResult {
-    id: string;
-    /** The app that sent it (slug). */
-    from: string;
-    files: HandoffFile[];
-    /** The context given to `send`. */
-    context: unknown;
-    /** The app the files were sent to and the action asked. */
-    to: string;
-    action: HandoffAction;
-}
-/** The handoff this app was opened with (`client.apps.incoming`). */
-export interface IncomingHandoff {
+/** Files another app sent this one (`client.apps.onReceive`). */
+export interface ReceivedHandoff {
     id: string;
     /** The sending app (slug). */
     from: string;
     action: HandoffAction;
     files: HandoffFile[];
-    /** The sender wants the result back (`reply`). */
-    canReply: boolean;
-    /** The app has already taken the files in (see `markImported`). */
-    imported: boolean;
     /** Copy file `index` into this app's storage at `path`, server side
      *  (the bytes do not pass through the browser). */
-    importTo(path: string, index?: number): Promise<import("./files.js").FileObject>;
+    importTo(path: string, index?: number): Promise<FileObject>;
     /** Download file `index`. */
     blob(index?: number): Promise<Blob>;
-    /** Record that the files were taken in, so a reload of the page does
-     *  not take them in again. The reply stays possible. */
-    markImported(): void;
-    /** The sending app's name and icon, for "Send back to …". */
+    /** The sending app's name and icon, for "Received from …". */
     fromApp(): Promise<{
         name: string;
         icon_url: string;
     }>;
-    /**
-     * Send the result back to the sender. Call it straight from the click
-     * that asks for it: it opens a small window on the sender's origin,
-     * which needs the user gesture. Blobs are stored in this app first
-     * (`handoff/<id>/<name>`) and handed back as signed links.
-     */
-    reply(files: HandoffSource[]): Promise<void>;
-    /** Forget the handoff (the user declined it, or it is done). */
-    dismiss(): void;
 }
-/** The wire form of a handoff, in the receiving app's URL fragment. */
+/** The wire form of a handoff, in the inbox page's URL fragment. */
 export interface HandoffPayload {
-    v: 1;
+    v: 2;
     id: string;
     from: string;
-    /** Where to send a result: the sender's origin. */
-    reply_to?: string;
     action: HandoffAction;
-    files: HandoffFile[];
-}
-/** The wire form of a result, in the callback page's URL fragment. */
-export interface ResultPayload {
-    v: 1;
-    id: string;
-    from: string;
     files: HandoffFile[];
 }
 export declare function encodeHandoff(obj: unknown): string;
@@ -116,57 +74,42 @@ export declare function appSlugOf(hostname: string): string;
 /** Where another app runs, seen from this page: the same scheme, domain
  *  and port, with that app's slug as the subdomain. */
 export declare function appOriginFrom(pageOrigin: string, slug: string): string;
-/** Whether an origin is an app host (the only places a result may go). */
+/** Whether an origin is an app host. */
 export declare function isAppOrigin(origin: string): boolean;
-/** Whether a handed-over link points at the platform's files host (or,
- *  from a local app page, the local backend). */
+/** Whether a sent link points at the platform's files host (or, from a
+ *  local app page, the local backend). */
 export declare function isFilesURL(url: string, local: boolean): boolean;
 /** Validates a handoff as it arrives; null when anything is off. */
 export declare function parseHandoffPayload(raw: unknown, local: boolean): HandoffPayload | null;
-/** Validates a result read back from localStorage. */
-export declare function parseResultPayload(raw: unknown, local: boolean): ResultPayload | null;
 /**
- * Reads a handoff from this page's URL fragment, before anything else
- * touches the fragment, and removes it from the address bar (other
- * fragment parameters stay). It is kept in sessionStorage so a reload, or
- * a sign-in that redirects the whole page, does not lose it. Called by
- * the client constructor; null when the page was not opened with one.
- */
-export declare function takeIncomingHandoff(): HandoffPayload | null;
-/**
- * App handoff: hand files to another app on the platform, take what
- * another app handed this one, and send results back.
+ * App handoff: send files to another app on the platform, and receive what
+ * other apps send this one.
  *
  * ```ts
- * // Sender: which apps edit a video, then hand one over.
- * const apps = await client.apps.receivers({ type: "video/mp4", action: "edit" });
- * button.onclick = () => client.apps.send(apps[0].slug, {
- *   files: [{ path: "clips/a.mp4" }], context: { nodeId },
- * });
- * client.apps.onResult(async (r) => {
- *   await client.files.putFromURL("clips/a-edited.mp4", r.files[0].url);
- * });
+ * // Send: which apps edit a video, then send one from a click.
+ * const apps = await client.apps.receivers({ type: "video/mp4" });
+ * button.onclick = () => client.apps.send(apps[0].slug, { files: [{ path: "clips/a.mp4" }] });
  *
- * // Receiver: the app was opened with files.
- * const inc = client.apps.incoming;
- * if (inc && !inc.imported) { await inc.importTo("in/" + inc.files[0].name); inc.markImported(); }
- * sendBack.onclick = () => inc.reply([{ blob: edited, name: "edited.mp4" }]);
+ * // Receive: whatever another app sends, now or while this app was closed.
+ * client.apps.onReceive(async (h) => {
+ *   const obj = await h.importTo("received/" + h.files[0].name);
+ *   addToDocument(obj);
+ * });
  * ```
  *
  * An app declares what it takes in its bundle.json:
- * `{"receives": [{"types": ["video/*"], "action": "edit", "reply": true}]}`.
+ * `{"receives": [{"types": ["video/*"], "action": "edit"}]}`.
  */
 export declare class AppsService {
     private transport;
     private files;
     private readonly project;
     private readonly signedIn;
-    /** The handoff this page was opened with, or null. */
-    readonly incoming: IncomingHandoff | null;
     private readonly local;
-    private resultHandlers;
+    private handlers;
     private delivering;
-    constructor(transport: Transport, files: FilesService, project: string | undefined, signedIn: () => boolean, payload: HandoffPayload | null);
+    private listening;
+    constructor(transport: Transport, files: FilesService, project: string | undefined, signedIn: () => boolean);
     /** This app's slug: its host's subdomain, else the `project` option. */
     get self(): string;
     /**
@@ -180,48 +123,48 @@ export declare class AppsService {
         signal?: AbortSignal;
     }): Promise<ReceiverApp[]>;
     /**
-     * Hand files to another app: it opens in a new tab with them. Call it
-     * straight from the click that asks for it (a new tab needs the user
-     * gesture); the window is opened first and pointed at the app once the
-     * links are signed. With action "edit" the app can send a result back,
-     * which arrives through `onResult` with `context`.
+     * Send files to another app. Call it straight from the click that asks
+     * for it: the app's inbox opens in a new tab (that needs the user
+     * gesture), so the window is opened first and pointed at the inbox once
+     * the links are signed. If the app is already open in a tab, that tab
+     * takes the files and the new tab says so; otherwise the new tab becomes
+     * the app.
      */
     send(to: string, opts: SendOptions): Promise<{
         id: string;
     }>;
     /**
-     * Receive results other apps send back. Results that arrived while
-     * this app was closed are delivered as soon as a handler is set. A
-     * result is forgotten once a handler returns (or its promise
-     * resolves); a handler that throws gets it again next time.
+     * Receive what other apps send this one: each handoff once, whether it
+     * arrives now (in this tab or, with the app open in several tabs, in one
+     * of them) or arrived while the app was closed. A handoff is forgotten
+     * once a handler returns (or its promise resolves); a handler that throws
+     * leaves it for later (another tab, the next start, or a new handler).
      */
-    onResult(handler: (r: HandoffResult) => unknown): () => void;
-    /** Handoffs this app sent that have not come back yet. */
-    pending(): {
+    onReceive(handler: (h: ReceivedHandoff) => unknown): () => void;
+    /** Handoffs waiting for this app (sent while it was closed, or not yet
+     *  taken), without taking them. An app checks it at start, to skip its
+     *  start screen or last document when it was opened to receive files. */
+    waiting(): {
         id: string;
-        to: string;
+        from: string;
         action: HandoffAction;
-        context: unknown;
-        at: number;
+        files: HandoffFile[];
     }[];
+    /** Hears the inbox page (BroadcastChannel) and other tabs (storage). */
+    private listen;
     /**
-     * Hands a stored result to the handlers. Every open tab of the app hears
-     * the same `storage` event, so tabs take turns under a lock named after
-     * the handoff (Web Locks, shared by the origin's tabs): the one holding
-     * it reads the result again — another tab may have taken it meanwhile —
-     * and only a tab whose handlers all succeed removes it. A tab whose
-     * handler throws (e.g. the canvas project the result belongs to is not
-     * the one open there) releases the lock and the next tab tries.
+     * Hands one inbox entry to the handlers. Every open tab hears of it, so
+     * tabs take turns under a lock named after the handoff (Web Locks,
+     * shared by the origin's tabs): the one holding it reads the entry again
+     * — another tab may have taken it — and only a tab whose handlers all
+     * succeed removes it.
      */
-    /** Whether a handoff this app sent is still waiting for its result
-     *  (false once any tab of the app has taken the result). */
-    isPending(id: string): boolean;
     private deliver;
     private deliverLocked;
-    /** Drops handoffs (sent or received) older than a week. */
+    private received;
+    /** Drops inbox entries older than a week. */
     private prune;
-    /** Signed links for the files to hand over; blobs are stored first. */
+    /** Links for the files to send; paths are signed, blobs stored first. */
     private prepare;
-    private makeIncoming;
 }
 //# sourceMappingURL=apps.d.ts.map

@@ -331,54 +331,42 @@ Paths are at most 900 bytes, and a single file is at most 200 MB.
 
 ## Sending files to another app
 
-An app can hand files to another app on the platform — a canvas sends a clip to a video editor — and get the result back. The two apps never share storage: the files travel as signed links, and the receiving app copies them into its own.
+An app can send files to another app on the platform — a canvas sends a clip to a video editor, the editor sends its export on to the canvas or to any other app. Sending is one way, and each app treats what it receives its own way. The apps never share storage: the files travel as links, and the receiving app copies them into its own.
 
 **Say what your app takes.** In `bundle.json` at the root of your zip:
 
 ```json
 { "receives": [
-    { "types": ["video/*"], "action": "edit", "reply": true },
-    { "types": ["video/*", "audio/*", "image/*"], "action": "open" } ] }
+    { "types": ["video/*"], "action": "edit" },
+    { "types": ["audio/*", "image/*"], "action": "open" } ] }
 ```
 
-`types` are MIME types or `type/*`. `action` is `open` (show the file) or `edit` (work on it); `reply: true` means you send the result back. The platform reads this when you upload the bundle; the publish page shows what it found.
+`types` are MIME types or `type/*`. `action` is how senders word it: `edit` ("Edit in …") or `open` ("Open in …"). The platform reads this when you upload the bundle; the publish page shows what it found.
 
-**Sending.** List the apps that take a file, then hand it over from a click (it opens a new tab):
+**Sending.** List the apps that take a file, then send it from a click (it opens a new tab):
 
 ```js
-const apps = await client.apps.receivers({ type: "video/mp4", action: "edit" });
-// [{ slug, name, icon_url, url, actions: ["edit", "open"], reply: true }]
+const apps = await client.apps.receivers({ type: "video/mp4" });
+// [{ slug, name, icon_url, url, actions: ["edit", "open"] }]
 
 button.onclick = () => client.apps.send(apps[0].slug, {
   files: [{ path: "clips/intro.mp4" }],   // or { blob, name } or { url, name }
-  context: { nodeId: "n42" },             // stays here; comes back with the result
-});
-
-client.apps.onResult(async (r) => {
-  // r.context is what you passed to send; r.files are signed links (24 h)
-  await client.files.putFromURL("clips/intro-edited.mp4", r.files[0].url);
 });
 ```
 
-A result that arrives while your app is closed is kept and handed to `onResult` the next time the app starts. It is forgotten once your handler returns; a handler that throws gets it again next time. With the app open in several tabs, they take turns on a result and only one applies it: a tab whose handler throws (say, the document it belongs to isn't open there) passes it to the next. `isPending(id)` tells whether it is still waiting.
+If the other app is already open in a tab, that tab takes the files and the new tab says so; otherwise the new tab becomes the app.
 
-**Receiving.** If your app was opened with files, `client.apps.incoming` holds them:
+**Receiving.** Whatever other apps send, now or while your app was closed:
 
 ```js
-const inc = client.apps.incoming;   // null when opened normally
-if (inc && !inc.imported) {
-  const obj = await inc.importTo("received/" + inc.files[0].name);  // server-side copy
-  inc.markImported();               // a reload won't import it again
-  openInEditor(obj.path);
-}
-if (inc?.canReply) {
-  const { name } = await inc.fromApp();
-  sendBack.textContent = `Send back to ${name}`;
-  sendBack.onclick = () => inc.reply([{ blob: rendered, name: "edited.mp4" }]);  // from the click
-}
+client.apps.onReceive(async (h) => {
+  // h.from, h.action, h.files: [{ url, name, type, size }]
+  const obj = await h.importTo("received/" + h.files[0].name);  // server-side copy
+  addToDocument(obj);
+});
 ```
 
-`reply` stores the result in your app's storage and opens a small window on the sender's site that delivers it and closes. Only a handoff the sender actually started can be answered.
+Each handoff reaches one handler call, in one tab even when your app is open in several. It is forgotten once your handler returns; a handler that throws leaves it for later (another tab, the next start). `client.apps.waiting()` lists what is waiting without taking it — check it at start to skip a start screen when the app was opened to receive files.
 
 ## Sync
 
@@ -612,7 +600,7 @@ Every call takes `{ signal }` for cancellation.
 | `client.realtime` | `connect` → session: `on`, `send`, `appendAudio`, `commitAudio`, `mute`, `unmute`, `say`, `cancelResponse`, `update`, `sendFunctionResult`, `close`, `closed` |
 | `client.video` | `generate`, `getStatus`, `wait`, `getContent` |
 | `client.embeddings` | `create` |
-| `client.apps` | `receivers`, `send`, `onResult`, `pending`, `isPending`, `incoming` → `importTo`, `blob`, `markImported`, `fromApp`, `reply`, `dismiss` |
+| `client.apps` | `receivers`, `send`, `onReceive` (→ `importTo`, `blob`, `fromApp`), `waiting` |
 
 Browser sign-in: `client.signIn()`, `client.signOut()`, `client.user`, `client.auth`.
 

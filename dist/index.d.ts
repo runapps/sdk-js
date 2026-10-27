@@ -9,7 +9,7 @@ export { RunApps, RunApps as Client, RunApps as RunJobs, type ClientOptions, typ
 export { SDKEvents, newRequestId, type RequestStartEvent, type RequestStreamDeltaEvent, type RequestEndEvent, type RequestErrorEvent, type SDKEventMap, type SDKCapability, type Unsubscribe, } from "./events.js";
 export { ActivityTracker, type ActiveCall, type CompletedCall, type SessionStats, type ActivitySnapshot, } from "./activity-tracker.js";
 export { BrowserAuth, type BrowserAuthOptions, type BrowserUser } from "./browser-auth.js";
-export { AppsService, encodeHandoff, decodeHandoff, parseHandoffPayload, parseResultPayload, appSlugOf, appOriginFrom, isAppOrigin, isFilesURL, type HandoffAction, type HandoffFile, type HandoffSource, type HandoffResult, type HandoffPayload, type ResultPayload, type IncomingHandoff, type ReceiverApp, type SendOptions, } from "./apps.js";
+export { AppsService, encodeHandoff, decodeHandoff, parseHandoffPayload, appSlugOf, appOriginFrom, isAppOrigin, isFilesURL, type HandoffAction, type HandoffFile, type HandoffSource, type HandoffPayload, type ReceivedHandoff, type ReceiverApp, type SendOptions, } from "./apps.js";
 export { SyncEngine, FilesRemote, installIndexedDBHook, type SyncOptions, type SyncState, type DbChange, type SyncRemote, type SyncDeps, } from "./sync/index.js";
 export type { SyncStateEvent, DbChangeEvent } from "./events.js";
 export { APIError } from "./errors.js";

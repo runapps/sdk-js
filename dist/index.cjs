@@ -59,7 +59,6 @@ __export(src_exports, {
   isFilesURL: () => isFilesURL,
   newRequestId: () => newRequestId,
   parseHandoffPayload: () => parseHandoffPayload,
-  parseResultPayload: () => parseResultPayload,
   pcm16FromFloat32: () => pcm16FromFloat32,
   requiresField: () => requiresField,
   supportsInstructText: () => supportsInstructText,
@@ -1944,12 +1943,11 @@ var SLUG = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
 var ID = /^[A-Za-z0-9_-]{8,64}$/;
 var MAX_FILES = 20;
 var HASH_PARAM = "runapps_handoff";
-var PENDING_PREFIX = "runapps_handoff:";
-var RESULT_PREFIX = "runapps_handoff_result:";
-var INCOMING_KEY = "runapps_handoff_incoming";
+var INBOX_PREFIX = "runapps_inbox:";
+var INBOX_CHANNEL = "runapps_inbox";
+var INBOX_PATH = "/__runapps/handoff.html";
 var KEEP_MS = 7 * 24 * 3600 * 1e3;
-var SEND_LINK_SECONDS = 3600;
-var REPLY_LINK_SECONDS = 24 * 3600;
+var SEND_LINK_SECONDS = 7 * 24 * 3600;
 function encodeHandoff(obj) {
   const bytes = new TextEncoder().encode(JSON.stringify(obj));
   let bin = "";
@@ -2000,26 +1998,13 @@ function cleanFiles(files, local) {
 function parseHandoffPayload(raw, local) {
   if (!raw || typeof raw !== "object") return null;
   const p = raw;
-  if (p.v !== 1 || typeof p.id !== "string" || !ID.test(p.id)) return null;
+  if (p.v !== 2 || typeof p.id !== "string" || !ID.test(p.id)) return null;
   if (typeof p.from !== "string" || !SLUG.test(p.from)) return null;
   const action = p.action === "open" ? "open" : p.action === "edit" ? "edit" : null;
   if (!action) return null;
   const files = cleanFiles(p.files, local);
   if (!files) return null;
-  let replyTo;
-  if (typeof p.reply_to === "string" && isAppOrigin(p.reply_to) && appSlugOf(new URL(p.reply_to).hostname) === p.from) {
-    replyTo = p.reply_to;
-  }
-  return { v: 1, id: p.id, from: p.from, action, files, ...replyTo ? { reply_to: replyTo } : {} };
-}
-function parseResultPayload(raw, local) {
-  if (!raw || typeof raw !== "object") return null;
-  const p = raw;
-  if (p.v !== 1 || typeof p.id !== "string" || !ID.test(p.id)) return null;
-  if (typeof p.from !== "string" || !SLUG.test(p.from)) return null;
-  const files = cleanFiles(p.files, local);
-  if (!files) return null;
-  return { v: 1, id: p.id, from: p.from, files };
+  return { v: 2, id: p.id, from: p.from, action, files };
 }
 function newId() {
   const b = new Uint8Array(12);
@@ -2031,12 +2016,6 @@ function lsGet(key) {
     return localStorage.getItem(key);
   } catch {
     return null;
-  }
-}
-function lsSet(key, value) {
-  try {
-    localStorage.setItem(key, value);
-  } catch {
   }
 }
 function lsDel(key) {
@@ -2056,61 +2035,18 @@ function lsKeys(prefix) {
   }
   return out;
 }
-function takeIncomingHandoff() {
-  if (typeof window === "undefined" || typeof location === "undefined" || typeof location.hash !== "string") return null;
-  const local = /\.localhost$/i.test(location.hostname);
-  const hash = location.hash.replace(/^#/, "");
-  if (hash) {
-    const parts = hash.split("&");
-    const i = parts.findIndex((p) => p.startsWith(HASH_PARAM + "="));
-    if (i >= 0) {
-      const raw = parts[i].slice(HASH_PARAM.length + 1);
-      parts.splice(i, 1);
-      try {
-        history.replaceState(history.state, "", location.pathname + location.search + (parts.length ? "#" + parts.join("&") : ""));
-      } catch {
-      }
-      let payload = null;
-      try {
-        payload = parseHandoffPayload(decodeHandoff(decodeURIComponent(raw)), local);
-      } catch {
-        payload = null;
-      }
-      if (payload) {
-        try {
-          sessionStorage.setItem(INCOMING_KEY, JSON.stringify({ payload, imported: false }));
-        } catch {
-        }
-        return payload;
-      }
-    }
-  }
-  try {
-    const kept = sessionStorage.getItem(INCOMING_KEY);
-    if (kept) return parseHandoffPayload(JSON.parse(kept).payload, local);
-  } catch {
-  }
-  return null;
-}
 var AppsService = class {
-  constructor(transport, files, project, signedIn, payload) {
+  constructor(transport, files, project, signedIn) {
     __publicField(this, "transport", transport);
     __publicField(this, "files", files);
     __publicField(this, "project", project);
     __publicField(this, "signedIn", signedIn);
-    /** The handoff this page was opened with, or null. */
-    __publicField(this, "incoming");
     __publicField(this, "local");
-    __publicField(this, "resultHandlers", []);
+    __publicField(this, "handlers", []);
     __publicField(this, "delivering", /* @__PURE__ */ new Set());
+    __publicField(this, "listening", false);
     this.local = typeof location !== "undefined" && /\.localhost$/i.test(location.hostname);
-    this.incoming = payload ? this.makeIncoming(payload) : null;
-    if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
-      this.prune();
-      window.addEventListener("storage", (e) => {
-        if (e.key && e.key.startsWith(RESULT_PREFIX) && e.newValue) this.deliver(e.key.slice(RESULT_PREFIX.length));
-      });
-    }
+    if (typeof localStorage !== "undefined") this.prune();
   }
   /** This app's slug: its host's subdomain, else the `project` option. */
   get self() {
@@ -2134,35 +2070,25 @@ var AppsService = class {
     return (r.data || []).filter((a) => a.slug !== self);
   }
   /**
-   * Hand files to another app: it opens in a new tab with them. Call it
-   * straight from the click that asks for it (a new tab needs the user
-   * gesture); the window is opened first and pointed at the app once the
-   * links are signed. With action "edit" the app can send a result back,
-   * which arrives through `onResult` with `context`.
+   * Send files to another app. Call it straight from the click that asks
+   * for it: the app's inbox opens in a new tab (that needs the user
+   * gesture), so the window is opened first and pointed at the inbox once
+   * the links are signed. If the app is already open in a tab, that tab
+   * takes the files and the new tab says so; otherwise the new tab becomes
+   * the app.
    */
   async send(to, opts) {
     if (!SLUG.test(to)) throw new Error("RunApps: send: not an app slug: " + to);
     if (!opts.files?.length || opts.files.length > MAX_FILES) throw new Error(`RunApps: send: 1\u2013${MAX_FILES} files`);
-    const action = opts.action ?? "edit";
     const id = newId();
     const win = openBlank("_blank");
     try {
-      const files = await this.prepare(id, opts.files, SEND_LINK_SECONDS);
-      const self = this.self;
-      const pageOrigin = location.origin;
-      const payload = {
-        v: 1,
-        id,
-        from: self || "app",
-        action,
-        files,
-        ...self && isAppOrigin(pageOrigin) ? { reply_to: pageOrigin } : {}
-      };
-      lsSet(PENDING_PREFIX + id, JSON.stringify({ to, action, context: opts.context ?? null, at: Date.now() }));
+      const files = await this.prepare(id, opts.files);
+      const payload = { v: 2, id, from: this.self || "app", action: opts.action ?? "edit", files };
       const q = new URLSearchParams();
       const lang = document.documentElement.lang || "";
       if (/^(zh|en)/i.test(lang)) q.set("lang", lang.slice(0, 2).toLowerCase());
-      const target = appOriginFrom(pageOrigin, to) + "/" + (q.toString() ? "?" + q : "") + "#" + HASH_PARAM + "=" + encodeHandoff(payload);
+      const target = appOriginFrom(location.origin, to) + INBOX_PATH + (q.toString() ? "?" + q : "") + "#" + HASH_PARAM + "=" + encodeHandoff(payload);
       await navigateOrOpen(win, target, "_blank");
       return { id };
     } catch (e) {
@@ -2170,123 +2096,144 @@ var AppsService = class {
         win?.close();
       } catch {
       }
-      lsDel(PENDING_PREFIX + id);
       throw e;
     }
   }
   /**
-   * Receive results other apps send back. Results that arrived while
-   * this app was closed are delivered as soon as a handler is set. A
-   * result is forgotten once a handler returns (or its promise
-   * resolves); a handler that throws gets it again next time.
+   * Receive what other apps send this one: each handoff once, whether it
+   * arrives now (in this tab or, with the app open in several tabs, in one
+   * of them) or arrived while the app was closed. A handoff is forgotten
+   * once a handler returns (or its promise resolves); a handler that throws
+   * leaves it for later (another tab, the next start, or a new handler).
    */
-  onResult(handler) {
-    this.resultHandlers.push(handler);
-    if (typeof window !== "undefined" && typeof localStorage !== "undefined") {
+  onReceive(handler) {
+    this.handlers.push(handler);
+    this.listen();
+    if (typeof localStorage !== "undefined") {
       queueMicrotask(() => {
-        for (const k of lsKeys(RESULT_PREFIX)) this.deliver(k.slice(RESULT_PREFIX.length));
+        for (const k of lsKeys(INBOX_PREFIX)) void this.deliver(k.slice(INBOX_PREFIX.length));
       });
     }
     return () => {
-      this.resultHandlers = this.resultHandlers.filter((h) => h !== handler);
+      this.handlers = this.handlers.filter((h) => h !== handler);
     };
   }
-  /** Handoffs this app sent that have not come back yet. */
-  pending() {
+  /** Handoffs waiting for this app (sent while it was closed, or not yet
+   *  taken), without taking them. An app checks it at start, to skip its
+   *  start screen or last document when it was opened to receive files. */
+  waiting() {
     const out = [];
-    for (const k of lsKeys(PENDING_PREFIX)) {
+    for (const k of lsKeys(INBOX_PREFIX)) {
       try {
-        out.push({ id: k.slice(PENDING_PREFIX.length), ...JSON.parse(lsGet(k) || "{}") });
+        const p = parseHandoffPayload(JSON.parse(lsGet(k) || "null")?.payload, this.local);
+        if (p) out.push({ id: p.id, from: p.from, action: p.action, files: p.files });
       } catch {
       }
     }
     return out;
   }
-  /**
-   * Hands a stored result to the handlers. Every open tab of the app hears
-   * the same `storage` event, so tabs take turns under a lock named after
-   * the handoff (Web Locks, shared by the origin's tabs): the one holding
-   * it reads the result again — another tab may have taken it meanwhile —
-   * and only a tab whose handlers all succeed removes it. A tab whose
-   * handler throws (e.g. the canvas project the result belongs to is not
-   * the one open there) releases the lock and the next tab tries.
-   */
-  /** Whether a handoff this app sent is still waiting for its result
-   *  (false once any tab of the app has taken the result). */
-  isPending(id) {
-    return lsGet(PENDING_PREFIX + id) !== null;
+  /** Hears the inbox page (BroadcastChannel) and other tabs (storage). */
+  listen() {
+    if (this.listening || typeof window === "undefined" || typeof window.addEventListener !== "function") return;
+    this.listening = true;
+    window.addEventListener("storage", (e) => {
+      if (e.key && e.key.startsWith(INBOX_PREFIX) && e.newValue) void this.deliver(e.key.slice(INBOX_PREFIX.length));
+    });
+    if (typeof BroadcastChannel === "function") {
+      const ch = new BroadcastChannel(INBOX_CHANNEL);
+      ch.onmessage = (e) => {
+        const d = e.data;
+        if (d?.type !== "new" || typeof d.id !== "string" || !this.handlers.length) return;
+        ch.postMessage({ type: "here", id: d.id });
+        void this.deliver(d.id);
+      };
+    }
   }
+  /**
+   * Hands one inbox entry to the handlers. Every open tab hears of it, so
+   * tabs take turns under a lock named after the handoff (Web Locks,
+   * shared by the origin's tabs): the one holding it reads the entry again
+   * — another tab may have taken it — and only a tab whose handlers all
+   * succeed removes it.
+   */
   async deliver(id) {
-    if (!this.resultHandlers.length || this.delivering.has(id)) return;
-    if (!lsGet(RESULT_PREFIX + id) || !lsGet(PENDING_PREFIX + id)) return;
+    if (!this.handlers.length || this.delivering.has(id) || !lsGet(INBOX_PREFIX + id)) return;
     this.delivering.add(id);
     try {
-      await withLock(PENDING_PREFIX + id, () => this.deliverLocked(id));
+      await withLock(INBOX_PREFIX + id, () => this.deliverLocked(id));
     } finally {
       this.delivering.delete(id);
     }
   }
   async deliverLocked(id) {
-    const rawResult = lsGet(RESULT_PREFIX + id);
-    const rawPending = lsGet(PENDING_PREFIX + id);
-    if (!rawResult || !rawPending) return;
-    let result = null;
-    let pending = {};
+    const raw = lsGet(INBOX_PREFIX + id);
+    if (!raw) return;
+    let p = null;
     try {
-      result = parseResultPayload(JSON.parse(rawResult), this.local);
-      pending = JSON.parse(rawPending);
+      p = parseHandoffPayload(JSON.parse(raw)?.payload, this.local);
     } catch {
-      result = null;
+      p = null;
     }
-    if (!result || result.id !== id) {
-      lsDel(RESULT_PREFIX + id);
+    if (!p || p.id !== id) {
+      lsDel(INBOX_PREFIX + id);
       return;
     }
-    const r = {
-      id,
-      from: result.from,
-      files: result.files,
-      context: pending.context ?? null,
-      to: pending.to ?? result.from,
-      action: pending.action ?? "edit"
-    };
+    const h = this.received(p);
     try {
-      for (const h of this.resultHandlers) await h(r);
-      lsDel(RESULT_PREFIX + id);
-      lsDel(PENDING_PREFIX + id);
+      for (const fn of this.handlers) await fn(h);
+      lsDel(INBOX_PREFIX + id);
     } catch (e) {
-      console.warn("RunApps: handoff result handler failed; kept for next time", e);
+      console.warn("RunApps: a handler could not take the files another app sent; kept for later", e);
     }
   }
-  /** Drops handoffs (sent or received) older than a week. */
+  received(p) {
+    const svc = this;
+    const file = (i) => {
+      const f = p.files[i];
+      if (!f) throw new Error("RunApps: no sent file " + i);
+      return f;
+    };
+    return {
+      id: p.id,
+      from: p.from,
+      action: p.action,
+      files: p.files,
+      importTo(path, index = 0) {
+        return svc.files.putFromURL(path, file(index).url);
+      },
+      async blob(index = 0) {
+        const r = await fetch(file(index).url);
+        if (!r.ok) throw new Error(`RunApps: sent file ${index}: HTTP ${r.status}`);
+        return r.blob();
+      },
+      async fromApp() {
+        try {
+          const r = await svc.transport.getPublicJSON("/api/projects/" + p.from);
+          return { name: r.data?.name || p.from, icon_url: r.data?.icon_url || "" };
+        } catch {
+          return { name: p.from, icon_url: "" };
+        }
+      }
+    };
+  }
+  /** Drops inbox entries older than a week. */
   prune() {
     const cutoff = Date.now() - KEEP_MS;
-    for (const k of lsKeys(PENDING_PREFIX)) {
+    for (const k of lsKeys(INBOX_PREFIX)) {
       try {
-        if ((JSON.parse(lsGet(k) || "{}").at ?? 0) < cutoff) {
-          lsDel(k);
-          lsDel(RESULT_PREFIX + k.slice(PENDING_PREFIX.length));
-        }
-      } catch {
-        lsDel(k);
-      }
-    }
-    for (const k of lsKeys(RESULT_PREFIX)) {
-      try {
-        const id = k.slice(RESULT_PREFIX.length);
-        if (!lsGet(PENDING_PREFIX + id) || (JSON.parse(lsGet(k) || "{}").received_at ?? 0) < cutoff) lsDel(k);
+        if ((JSON.parse(lsGet(k) || "{}").received_at ?? 0) < cutoff) lsDel(k);
       } catch {
         lsDel(k);
       }
     }
   }
-  /** Signed links for the files to hand over; blobs are stored first. */
-  async prepare(id, sources, seconds) {
+  /** Links for the files to send; paths are signed, blobs stored first. */
+  async prepare(id, sources) {
     const out = [];
     const toSign = [];
     for (const [i, s] of sources.entries()) {
       if ("url" in s) {
-        if (!isFilesURL(s.url, this.local)) throw new Error("RunApps: hand over files-host links only: " + s.url);
+        if (!isFilesURL(s.url, this.local)) throw new Error("RunApps: send files-host links only: " + s.url);
         out[i] = { url: s.url, name: s.name, type: s.type ?? "", ...s.size !== void 0 ? { size: s.size } : {} };
       } else if ("blob" in s) {
         const name = s.name.replace(/[\\/]/g, "_") || "file";
@@ -2300,7 +2247,7 @@ var AppsService = class {
       }
     }
     if (toSign.length) {
-      const urls = await this.files.urls(toSign.map((t) => t.path), { expiresIn: seconds });
+      const urls = await this.files.urls(toSign.map((t) => t.path), { expiresIn: SEND_LINK_SECONDS });
       for (const t of toSign) {
         const u = urls[t.path];
         if (!u) throw new Error("RunApps: could not sign " + t.path);
@@ -2308,76 +2255,6 @@ var AppsService = class {
       }
     }
     return out;
-  }
-  makeIncoming(p) {
-    const svc = this;
-    const readKept = () => {
-      try {
-        return JSON.parse(sessionStorage.getItem(INCOMING_KEY) || "null");
-      } catch {
-        return null;
-      }
-    };
-    const file = (i) => {
-      const f = p.files[i];
-      if (!f) throw new Error("RunApps: no handed-over file " + i);
-      return f;
-    };
-    return {
-      id: p.id,
-      from: p.from,
-      action: p.action,
-      files: p.files,
-      canReply: p.action === "edit" && !!p.reply_to,
-      get imported() {
-        return !!readKept()?.imported;
-      },
-      importTo(path, index = 0) {
-        return svc.files.putFromURL(path, file(index).url);
-      },
-      async blob(index = 0) {
-        const r = await fetch(file(index).url);
-        if (!r.ok) throw new Error(`RunApps: handed-over file ${index}: HTTP ${r.status}`);
-        return r.blob();
-      },
-      markImported() {
-        try {
-          sessionStorage.setItem(INCOMING_KEY, JSON.stringify({ payload: p, imported: true }));
-        } catch {
-        }
-      },
-      async fromApp() {
-        try {
-          const r = await svc.transport.getPublicJSON("/api/projects/" + p.from);
-          return { name: r.data?.name || p.from, icon_url: r.data?.icon_url || "" };
-        } catch {
-          return { name: p.from, icon_url: "" };
-        }
-      },
-      async reply(sources) {
-        if (!p.reply_to || p.action !== "edit") throw new Error("RunApps: this handoff takes no reply");
-        const win = openBlank("runapps-handoff", "popup=yes,width=460,height=320");
-        try {
-          const files = await svc.prepare(p.id, sources, REPLY_LINK_SECONDS);
-          const result = { v: 1, id: p.id, from: svc.self || "app", files };
-          const url = p.reply_to + "/__runapps/handoff.html?id=" + encodeURIComponent(p.id) + "#runapps_result=" + encodeHandoff(result);
-          await navigateOrOpen(win, url, "runapps-handoff", "popup=yes,width=460,height=320");
-        } catch (e) {
-          try {
-            win?.close();
-          } catch {
-          }
-          throw e;
-        }
-      },
-      dismiss() {
-        try {
-          sessionStorage.removeItem(INCOMING_KEY);
-        } catch {
-        }
-        svc.incoming = null;
-      }
-    };
   }
 };
 function withLock(name, fn) {
@@ -5404,8 +5281,8 @@ var RunApps = class {
     __publicField(this, "realtime");
     /** Seedance asset verification (a gated feature) — see `AssetsService`. */
     __publicField(this, "assets");
-    /** App handoff: hand files to another app, take what this one was
-     *  handed, send results back — see `AppsService`. */
+    /** App handoff: send files to another app and receive what other apps
+     *  send this one — see `AppsService`. */
     __publicField(this, "apps");
     __publicField(this, "transport");
     /**
@@ -5435,7 +5312,6 @@ var RunApps = class {
      * returned closure is the unsubscribe.
      */
     __publicField(this, "events", new SDKEvents());
-    const handoff = takeIncomingHandoff();
     const provider = options.authProvider ?? (!options.apiKey && !options.apiKeyResolver && typeof window !== "undefined" ? "runapps" : "static");
     let apiKeyResolver = options.apiKeyResolver;
     let baseURL = options.baseURL;
@@ -5484,8 +5360,7 @@ var RunApps = class {
       transport,
       this.files,
       options.project,
-      () => !!options.apiKey || !!options.apiKeyResolver || !!this.auth?.user,
-      handoff
+      () => !!options.apiKey || !!options.apiKeyResolver || !!this.auth?.user
     );
     this.transport = transport;
     const wantSync = options.sync ?? this.auth !== null;

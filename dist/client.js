@@ -8,7 +8,7 @@ import { VideoService } from "./video.js";
 import { FilesService } from "./files.js";
 import { EmbeddingsService } from "./embeddings.js";
 import { AssetsService } from "./assets.js";
-import { AppsService, takeIncomingHandoff } from "./apps.js";
+import { AppsService } from "./apps.js";
 import { BrowserAuth } from "./browser-auth.js";
 import { FilesRemote, SyncEngine } from "./sync/index.js";
 import { SDKEvents } from "./events.js";
@@ -51,8 +51,8 @@ export class RunApps {
     realtime;
     /** Seedance asset verification (a gated feature) — see `AssetsService`. */
     assets;
-    /** App handoff: hand files to another app, take what this one was
-     *  handed, send results back — see `AppsService`. */
+    /** App handoff: send files to another app and receive what other apps
+     *  send this one — see `AppsService`. */
     apps;
     transport;
     /**
@@ -83,9 +83,6 @@ export class RunApps {
      */
     events = new SDKEvents();
     constructor(options = {}) {
-        // A handoff from another app arrives in the URL fragment; take it
-        // before sign-in reads (and may rewrite) the fragment.
-        const handoff = takeIncomingHandoff();
         // With no key and no explicit authProvider, a browser client uses the
         // platform sign-in: `new RunApps()` is all an app needs. Elsewhere
         // (Node, workers without a window) there is no one to sign in.
@@ -161,7 +158,7 @@ export class RunApps {
         this.embeddings = new EmbeddingsService(transport, this.events);
         this.realtime = new RealtimeService(transport, this.events);
         this.assets = new AssetsService(transport);
-        this.apps = new AppsService(transport, this.files, options.project, () => !!options.apiKey || !!options.apiKeyResolver || !!this.auth?.user, handoff);
+        this.apps = new AppsService(transport, this.files, options.project, () => !!options.apiKey || !!options.apiKeyResolver || !!this.auth?.user);
         this.transport = transport;
         // Sync: an app on RunApps gets it unless it says no. It
         // stores under the signed-in user, so only browser sign-in mode has

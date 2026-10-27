@@ -149,8 +149,8 @@ export declare class RunApps {
     readonly realtime: RealtimeService;
     /** Seedance asset verification (a gated feature) — see `AssetsService`. */
     readonly assets: AssetsService;
-    /** App handoff: hand files to another app, take what this one was
-     *  handed, send results back — see `AppsService`. */
+    /** App handoff: send files to another app and receive what other apps
+     *  send this one — see `AppsService`. */
     readonly apps: AppsService;
     private readonly transport;
     /**

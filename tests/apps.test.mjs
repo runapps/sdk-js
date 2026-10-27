@@ -1,5 +1,5 @@
-// App handoff (src/apps.ts): the wire format and the checks a receiving
-// app and the sender's result handling rely on.
+// App handoff (src/apps.ts): the wire format, the checks a receiving app
+// relies on, and how an inbox entry reaches exactly one tab.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -9,7 +9,6 @@ import {
   encodeHandoff,
   decodeHandoff,
   parseHandoffPayload,
-  parseResultPayload,
   appSlugOf,
   appOriginFrom,
   isAppOrigin,
@@ -18,10 +17,9 @@ import {
 
 const signed = "https://files.runapps.ai/f/AbC123_-xyz/clip.mp4";
 const good = {
-  v: 1,
+  v: 2,
   id: "0123456789abcdef01234567",
   from: "infinite-canvas",
-  reply_to: "https://infinite-canvas.runapps.dev",
   action: "edit",
   files: [{ url: signed, name: "clip.mp4", type: "video/mp4", size: 1234 }],
 };
@@ -37,9 +35,9 @@ test("a well-formed handoff is accepted as sent", () => {
   assert.deepEqual(parseHandoffPayload(good, false), good);
 });
 
-test("a handoff with a bad id, slug, action or file is refused", () => {
+test("a handoff with a bad version, id, slug, action or file is refused", () => {
   const bad = [
-    { ...good, v: 2 },
+    { ...good, v: 1 },
     { ...good, id: "short" },
     { ...good, id: "has space in it!" },
     { ...good, from: "Not_A_Slug" },
@@ -52,37 +50,15 @@ test("a handoff with a bad id, slug, action or file is refused", () => {
   for (const p of bad) assert.equal(parseHandoffPayload(p, false), null, JSON.stringify(p));
 });
 
-test("reply_to must be the sender's own app origin", () => {
-  for (const reply_to of [
-    "https://evil.example",
-    "https://other-app.runapps.dev",          // not the sender
-    "http://infinite-canvas.runapps.dev",     // not https
-    "https://infinite-canvas.runapps.dev/x",  // not an origin
-  ]) {
-    const p = parseHandoffPayload({ ...good, reply_to }, false);
-    assert.ok(p, reply_to);
-    assert.equal(p.reply_to, undefined, reply_to);
-  }
-});
-
 test("file names are made safe", () => {
   const p = parseHandoffPayload({ ...good, files: [{ url: signed, name: "../../etc/passwd\u0000", type: "video/mp4" }] }, false);
   assert.equal(p.files[0].name, ".._.._etc_passwd_");
 });
 
 test("local links are accepted only on a local page", () => {
-  const local = { ...good, reply_to: "http://infinite-canvas.localhost:8080", files: [{ url: "http://localhost:8080/f/tok/clip.mp4", name: "clip.mp4" }] };
+  const local = { ...good, files: [{ url: "http://localhost:8080/f/tok/clip.mp4", name: "clip.mp4" }] };
   assert.equal(parseHandoffPayload(local, false), null);
-  const p = parseHandoffPayload(local, true);
-  assert.ok(p);
-  assert.equal(p.reply_to, "http://infinite-canvas.localhost:8080");
-});
-
-test("results are checked like handoffs", () => {
-  const r = { v: 1, id: good.id, from: "video-studio", files: good.files };
-  assert.deepEqual(parseResultPayload(r, false), r);
-  assert.equal(parseResultPayload({ ...r, files: [{ url: "https://evil.example/a", name: "a" }] }, false), null);
-  assert.equal(parseResultPayload({ ...r, id: "x" }, false), null);
+  assert.ok(parseHandoffPayload(local, true));
 });
 
 test("app hosts and origins", () => {
@@ -98,8 +74,9 @@ test("app hosts and origins", () => {
   assert.equal(isFilesURL("https://files.runapps.ai/u/abc/files/x", false), false);
 });
 
-// ── Several tabs of the sending app ─────────────────────────────────────
+// ── The inbox, with the app open in several tabs ────────────────────────
 // The tabs share localStorage and Web Locks; each has its own service.
+
 function sharedBrowser() {
   const store = new Map();
   globalThis.localStorage = {
@@ -128,51 +105,62 @@ function sharedBrowser() {
 }
 
 function tab(handler) {
-  const svc = new AppsService({}, {}, "infinite-canvas", () => true, null);
-  svc.onResult(handler);
+  const svc = new AppsService({}, {}, "video-studio", () => true);
+  svc.handlers.push(handler); // onReceive without the start-up sweep
   return svc;
 }
 
-function storeResult(id) {
-  localStorage.setItem("runapps_handoff:" + id, JSON.stringify({ to: "video-studio", action: "edit", context: { node: "n1" }, at: Date.now() }));
-  localStorage.setItem("runapps_handoff_result:" + id, JSON.stringify({ v: 1, id, from: "video-studio", files: [{ url: signed, name: "e.mp4", type: "video/mp4" }], received_at: Date.now() }));
+// What the inbox page writes.
+function arrive(id, payload = good) {
+  localStorage.setItem("runapps_inbox:" + id, JSON.stringify({ payload: { ...payload, id }, received_at: Date.now() }));
 }
 
-test("with two tabs open, a result is applied once", async () => {
+const quiet = async (fn) => {
+  const warn = console.warn; console.warn = () => {};
+  try { await fn(); } finally { console.warn = warn; }
+};
+
+test("waiting() lists what arrived, without taking it", () => {
   sharedBrowser();
-  const id = "aaaaaaaaaaaaaaaaaaaaaaaa";
-  let applied = 0;
-  const slow = async () => { applied++; await new Promise((r) => setTimeout(r, 20)); };
-  const a = tab(slow), b = tab(slow);
-  storeResult(id);
-  await Promise.all([a.deliver(id), b.deliver(id)]); // the storage event reaches both
-  assert.equal(applied, 1);
-  assert.equal(localStorage.getItem("runapps_handoff_result:" + id), null);
-  assert.equal(a.isPending(id), false);
+  const id = "dddddddddddddddddddddddd";
+  arrive(id);
+  const t = new AppsService({}, {}, "video-studio", () => true);
+  assert.deepEqual(t.waiting().map((w) => [w.id, w.from, w.files.length]), [[id, "infinite-canvas", 1]]);
+  assert.equal(t.waiting().length, 1);
 });
 
-test("a tab that cannot apply it passes the result to the next", async () => {
+test("with two tabs open, a handoff is taken once", async () => {
+  sharedBrowser();
+  const id = "aaaaaaaaaaaaaaaaaaaaaaaa";
+  let taken = 0;
+  const slow = async () => { taken++; await new Promise((r) => setTimeout(r, 20)); };
+  const a = tab(slow), b = tab(slow);
+  arrive(id);
+  await Promise.all([a.deliver(id), b.deliver(id)]); // both tabs hear of it
+  assert.equal(taken, 1);
+  assert.equal(localStorage.getItem("runapps_inbox:" + id), null);
+});
+
+test("a tab that cannot take it passes the handoff to the next", async () => {
   sharedBrowser();
   const id = "bbbbbbbbbbbbbbbbbbbbbbbb";
   const seen = [];
-  const wrongProject = tab(async () => { seen.push("a"); throw new Error("project not open"); });
-  const rightProject = tab(async (r) => { seen.push("b:" + r.context.node); });
-  storeResult(id);
-  const warn = console.warn; console.warn = () => {};
-  try {
-    await Promise.all([wrongProject.deliver(id), rightProject.deliver(id)]);
-  } finally { console.warn = warn; }
-  assert.deepEqual(seen, ["a", "b:n1"]);
-  assert.equal(rightProject.isPending(id), false);
+  const busy = tab(async () => { seen.push("a"); throw new Error("no document open"); });
+  const ready = tab(async (h) => { seen.push("b:" + h.from + ":" + h.files[0].name); });
+  arrive(id);
+  await quiet(() => Promise.all([busy.deliver(id), ready.deliver(id)]));
+  assert.deepEqual(seen, ["a", "b:infinite-canvas:clip.mp4"]);
+  assert.equal(ready.waiting().length, 0);
 });
 
-test("a result nobody can apply stays for later", async () => {
+test("a handoff nobody can take stays for later; a broken one is dropped", async () => {
   sharedBrowser();
-  const id = "cccccccccccccccccccccccc";
+  const keep = "cccccccccccccccccccccccc";
+  const broken = "eeeeeeeeeeeeeeeeeeeeeeee";
   const t = tab(async () => { throw new Error("not now"); });
-  storeResult(id);
-  const warn = console.warn; console.warn = () => {};
-  try { await t.deliver(id); } finally { console.warn = warn; }
-  assert.equal(t.isPending(id), true);
-  assert.notEqual(localStorage.getItem("runapps_handoff_result:" + id), null);
+  arrive(keep);
+  arrive(broken, { ...good, files: [{ url: "https://evil.example/x", name: "x" }] });
+  await quiet(() => Promise.all([t.deliver(keep), t.deliver(broken)]));
+  assert.notEqual(localStorage.getItem("runapps_inbox:" + keep), null);
+  assert.equal(localStorage.getItem("runapps_inbox:" + broken), null);
 });
