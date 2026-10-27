@@ -1,6 +1,6 @@
 {
   "name": "@runappsai/sdk",
-  "version": "0.14.2",
+  "version": "0.14.3",
   "description": "JavaScript / TypeScript client for the RunApps AI Gateway",
   "license": "MIT",
   "author": "RunApps",

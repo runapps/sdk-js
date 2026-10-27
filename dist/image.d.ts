@@ -14,8 +14,9 @@ import type { SDKEvents } from "./events.js";
  */
 export interface ImageGenerateParams {
     /** The prompt text, a private prompt `{ id, vars }`, or a list of
-     *  those and texts joined in order (see `PromptInput`). */
-    prompt: string | PromptInput;
+     *  those and texts joined in order (see `PromptInput`). Required
+     *  except by models that work on `source_image_url` (upscalers). */
+    prompt?: string | PromptInput;
     /** Legacy explicit "WxH" override. Prefer `resolution` +
      *  `aspect_ratio` for new code. */
     size?: string;
@@ -30,6 +31,22 @@ export interface ImageGenerateParams {
     n?: number;
     style?: string;
     reference_image_urls?: string[];
+    /** The picture an upscaler (capability tag `upscale`, e.g.
+     *  "Topaz Upscale") enlarges: `https://` or a `data:` URI; JPEG, PNG
+     *  or TIFF. Such models need no prompt. */
+    source_image_url?: string;
+    /** Upscalers: which model to upscale with. "Topaz Upscale" takes
+     *  `standard` (general purpose, the default), `low_resolution` (small
+     *  or compressed sources), `cgi` (art, illustration, 3D renders),
+     *  `high_fidelity` (sharp high-resolution photos), `text_refine`
+     *  (text and graphics). `getOptionsSchema(model)` lists them. */
+    variant?: string;
+    /** Upscalers: how many times larger than the source — 1 (same size,
+     *  enhanced only), 2 (default), 4 or 6. */
+    scale?: number;
+    /** Upscalers: "jpeg" or "png". By default a PNG source stays PNG
+     *  (transparency kept) and anything else comes back as JPEG. */
+    output_format?: "jpeg" | "png";
     user?: string;
     /**
      * Pass-through for provider-specific knobs.

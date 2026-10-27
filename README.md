@@ -445,6 +445,13 @@ const img = await client.image.generate("MiniMax Image-01", {
 await client.image.edit("GPT Image", { image: { data: bytes, filename: "photo.png" }, prompt: "add a party hat" });
 // generateAsync, or submitGenerate + getAsyncStatus, for jobs longer than about 100 s
 
+// Upscale (tag "upscale"): no prompt; variant and scale pick the model and size.
+const hd = await client.image.generateAsync("Topaz Upscale", {
+  source_image_url: url,                      // https:// or data: URI; JPEG, PNG or TIFF
+  variant: "standard",                        // low_resolution | cgi | high_fidelity | text_refine
+  scale: 2,                                   // 1 | 2 | 4 | 6; a PNG stays PNG with its transparency
+});
+
 // Speech.
 const speech = await client.audio.speech("MiniMax Speech 2.6 HD", { input: "Hello", voice: "English_radiant_girl", emotion: "happy" });
 const text = await client.audio.transcribe("OpenAI/Whisper", { file: { data: audioBytes, filename: "a.mp3" } });
@@ -461,7 +468,7 @@ if (status.status === "succeeded") await client.video.getContent(task.id);
 const e = await client.embeddings.create("text-embedding-3-small", { input: ["alpha", "beta"] });
 ```
 
-`client.video.quote`, `client.image.quote` and `client.audio.quoteSpeech` take the same arguments as the call and return `{ total_cost, note }`: what the signed-in user would be charged, fees included, without running it. Video is the one to quote: a 30 s 1080p Seedance clip costs dollars, and the price depends on resolution, duration and reference clips.
+`client.video.quote`, `client.image.quote` and `client.audio.quoteSpeech` take the same arguments as the call and return `{ total_cost, note }`: what the signed-in user would be charged, fees included, without running it. Video is the one to quote: a 30 s 1080p Seedance clip costs dollars, and the price depends on resolution, duration and reference clips. An upscale is priced by the size it makes (Topaz: one credit per 24 MP of output), so quote it too when the source can be large.
 
 A finished video is kept for 2 hours: `status.expires_at` (Unix seconds) is when `getContent` and `video_url` stop working. If the app needs the video later, save it before then:
 
