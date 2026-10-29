@@ -196,6 +196,9 @@ export interface ChatChunkDelta {
     role?: string;
     content?: string;
     tool_calls?: ChatToolCall[];
+    /** Reasoning text some models stream before the answer (DeepSeek-style). */
+    reasoning_content?: string;
+    reasoning?: string;
 }
 export interface ChatChunkChoice {
     index: number;
@@ -262,5 +265,24 @@ export declare class ChatService {
     stream(params: ChatCompletionParams, init?: {
         signal?: AbortSignal;
     }): AsyncGenerator<ChatCompletionChunk, void, unknown>;
+    /**
+     * A completion whose answer is a JSON value matching `schema`: asks for
+     * it with `response_format: json_schema` and parses the reply, also
+     * when a model wraps it in a code fence or adds a trailing comma.
+     * Returns the parsed value with the completion it came from.
+     */
+    structured<T = unknown>(params: ChatCompletionParams, schema: Record<string, unknown>, init?: {
+        signal?: AbortSignal;
+        name?: string;
+    }): Promise<{
+        value: T;
+        completion: ChatCompletion;
+    }>;
 }
+/**
+ * Parses JSON the way models write it: tolerates a ```json fence, text
+ * around the value, // and /* comments, trailing commas and curly quotes.
+ * Returns undefined when nothing parses.
+ */
+export declare function parseJSONLoose<T = unknown>(text: string): T | undefined;
 //# sourceMappingURL=chat.d.ts.map

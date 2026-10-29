@@ -6,6 +6,9 @@ import { RealtimeService } from "./realtime.js";
 import { VideoService } from "./video.js";
 import { FilesService } from "./files.js";
 import { EmbeddingsService } from "./embeddings.js";
+import { Agent } from "./agent/agent.js";
+import type { AgentOptions } from "./agent/types.js";
+import { Workspace, type WorkspaceOptions } from "./agent/workspace.js";
 import { AssetsService } from "./assets.js";
 import { AppsService } from "./apps.js";
 import { BrowserAuth, type BrowserUser } from "./browser-auth.js";
@@ -153,6 +156,8 @@ export declare class RunApps {
      *  send this one — see `AppsService`. */
     readonly apps: AppsService;
     private readonly transport;
+    /** The `project` option, when given (scopes workspaces). */
+    private readonly projectName;
     /**
      * Browser auth helper, populated only when `authProvider: "runapps"`.
      * Use `client.signIn()` and `client.user` for the common cases; the
@@ -203,6 +208,16 @@ export declare class RunApps {
      * platform enabled for them (e.g. "seedance_asset_verify"), so an app
      * shows a gated control only to those who have it.
      */
+    /**
+     * An agent: the model ↔ tool loop with your tools, a workspace of
+     * files and skills, and your dialogs. See the README section "Agents".
+     */
+    agent(opts?: AgentOptions): Agent;
+    /**
+     * A workspace for agents: a file tree in IndexedDB with skills unpacked
+     * from zip(s). Resolves once the skills are in place.
+     */
+    workspace(opts?: WorkspaceOptions): Promise<Workspace>;
     me(init?: {
         signal?: AbortSignal;
     }): Promise<Me>;

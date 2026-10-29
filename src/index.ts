@@ -207,3 +207,7 @@ export type {
 
 // Server-tool names for chat.create({ server_tools }), with autocomplete.
 export { ServerTools, type ServerToolName } from "./chat.js";
+
+// Agent harness: the model ↔ tool loop, workspace (files + skills), tools, dialogs.
+export * from "./agent/index.js";
+export { parseJSONLoose } from "./chat.js";

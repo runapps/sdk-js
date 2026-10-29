@@ -205,6 +205,9 @@ export interface ChatChunkDelta {
   role?: string;
   content?: string;
   tool_calls?: ChatToolCall[];
+  /** Reasoning text some models stream before the answer (DeepSeek-style). */
+  reasoning_content?: string;
+  reasoning?: string;
 }
 
 export interface ChatChunkChoice {
@@ -344,7 +347,7 @@ export class ChatService {
       if (!resp.body) {
         throw new Error("runapps: streaming response had no body");
       }
-      yield* parseSSE<ChatCompletionChunk>(resp.body);
+      yield* parseSSE<ChatCompletionChunk>(resp.body, init?.signal);
     }.bind(this);
     yield* wrapStream(
       this.events,
@@ -358,6 +361,89 @@ export class ChatService {
       }),
     );
   }
+
+  /**
+   * A completion whose answer is a JSON value matching `schema`: asks for
+   * it with `response_format: json_schema` and parses the reply, also
+   * when a model wraps it in a code fence or adds a trailing comma.
+   * Returns the parsed value with the completion it came from.
+   */
+  async structured<T = unknown>(
+    params: ChatCompletionParams,
+    schema: Record<string, unknown>,
+    init?: { signal?: AbortSignal; name?: string },
+  ): Promise<{ value: T; completion: ChatCompletion }> {
+    const completion = await this.create(
+      {
+        ...params,
+        stream: false,
+        response_format: {
+          type: "json_schema",
+          json_schema: { name: init?.name ?? "result", schema, strict: true },
+        },
+      },
+      init,
+    );
+    const text = completion.choices[0]?.message.content ?? "";
+    const value = parseJSONLoose<T>(typeof text === "string" ? text : "");
+    if (value === undefined) {
+      throw new Error(`runapps: the model's reply is not JSON: ${String(text).slice(0, 200)}`);
+    }
+    return { value, completion };
+  }
+}
+
+/**
+ * Parses JSON the way models write it: tolerates a ```json fence, text
+ * around the value, // and /* comments, trailing commas and curly quotes.
+ * Returns undefined when nothing parses.
+ */
+export function parseJSONLoose<T = unknown>(text: string): T | undefined {
+  if (typeof text !== "string") return undefined;
+  const attempts: string[] = [];
+  const trimmed = text.trim();
+  attempts.push(trimmed);
+  const fence = /```(?:json|JSON|javascript|js)?\s*\n?([\s\S]*?)```/.exec(trimmed);
+  if (fence?.[1]) attempts.push(fence[1].trim());
+  // The outermost {...} or [...] in the text.
+  const first = trimmed.search(/[[{]/);
+  if (first >= 0) {
+    const open = trimmed[first];
+    const close = open === "{" ? "}" : "]";
+    const last = trimmed.lastIndexOf(close);
+    if (last > first) attempts.push(trimmed.slice(first, last + 1));
+  }
+  for (const a of attempts) {
+    for (const candidate of [a, repairJSON(a)]) {
+      try {
+        return JSON.parse(candidate) as T;
+      } catch { /* next */ }
+    }
+  }
+  return undefined;
+}
+
+function repairJSON(s: string): string {
+  let out = "";
+  let inStr = false;
+  let quote = "";
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i]!;
+    if (inStr) {
+      if (c === "\\" ) { out += c + (s[i + 1] ?? ""); i++; continue; }
+      if (c === quote) { inStr = false; out += '"'; continue; }
+      if (c === '"') { out += '\\"'; continue; }
+      out += c;
+      continue;
+    }
+    if (c === '"' || c === "\u201c" || c === "\u201d") { inStr = true; quote = c === '"' ? '"' : (c === "\u201c" ? "\u201d" : "\u201c"); out += '"'; continue; }
+    if (c === "'" ) { inStr = true; quote = "'"; out += '"'; continue; }
+    if (c === "/" && s[i + 1] === "/") { while (i < s.length && s[i] !== "\n") i++; continue; }
+    if (c === "/" && s[i + 1] === "*") { const end = s.indexOf("*/", i + 2); i = end < 0 ? s.length : end + 1; continue; }
+    out += c;
+  }
+  // Trailing commas before } or ].
+  return out.replace(/,\s*([}\]])/g, "$1");
 }
 
 /* ------------------------------------------------------------------ */
@@ -371,14 +457,26 @@ export class ChatService {
  */
 async function* parseSSE<T>(
   body: ReadableStream<Uint8Array>,
+  signal?: AbortSignal,
 ): AsyncGenerator<T, void, unknown> {
   const decoder = new TextDecoder();
   const reader = body.getReader();
   let buffer = "";
+  let finished = false;
+  // fetch rejects the body on abort in browsers and Node, but not every
+  // fetch replacement does; racing each read against the signal makes
+  // abort reliable regardless.
+  const aborted = new Promise<never>((_, reject) => {
+    if (!signal) return;
+    const fail = () => reject(signal.reason instanceof Error ? signal.reason : new DOMException("The operation was aborted.", "AbortError"));
+    if (signal.aborted) fail();
+    else signal.addEventListener("abort", fail, { once: true });
+  });
+  aborted.catch(() => undefined);
   try {
     while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
+      const { value, done } = signal ? await Promise.race([reader.read(), aborted]) : await reader.read();
+      if (done) { finished = true; break; }
       buffer += decoder.decode(value, { stream: true });
 
       let nl: number;
@@ -387,7 +485,7 @@ async function* parseSSE<T>(
         buffer = buffer.slice(nl + 1);
         if (!line.startsWith("data: ")) continue;
         const data = line.slice(6).trim();
-        if (data === "[DONE]") return;
+        if (data === "[DONE]") { finished = true; return; }
         if (!data) continue;
         let parsed: unknown;
         try {
@@ -414,6 +512,12 @@ async function* parseSSE<T>(
       }
     }
   } finally {
+    // A consumer that stops early (break, throw, abort) must close the
+    // request, or the gateway keeps streaming — and billing — into a
+    // buffer nobody reads.
+    if (!finished) {
+      try { await reader.cancel(); } catch { /* already closed */ }
+    }
     reader.releaseLock();
   }
 }
