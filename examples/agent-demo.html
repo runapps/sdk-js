@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>RunApps agent demo</title>
+<script src="../dist/sdk.umd.js"></script>
+<style>
+  body { font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; display: grid; grid-template-columns: 1fr 320px; height: 100vh; color: #111; }
+  main { display: flex; flex-direction: column; min-width: 0; }
+  aside { border-left: 1px solid #ddd; padding: 12px; overflow: auto; font-size: 12px; background: #fafafa; }
+  #log { flex: 1; overflow: auto; padding: 16px; }
+  .msg { max-width: 720px; margin: 0 0 12px; padding: 10px 12px; border-radius: 10px; white-space: pre-wrap; word-break: break-word; }
+  .user { background: #e8f0fe; margin-left: auto; }
+  .assistant { background: #f1f3f4; }
+  .tool { font: 12px ui-monospace, Menlo, monospace; color: #555; padding: 2px 12px; }
+  .tool.error, .tool.declined { color: #b00020; }
+  form { display: flex; gap: 8px; padding: 12px 16px; border-top: 1px solid #ddd; }
+  input, textarea, select, button { font: inherit; }
+  textarea { flex: 1; min-height: 44px; padding: 8px; border: 1px solid #ccc; border-radius: 8px; resize: vertical; }
+  button { padding: 8px 14px; border-radius: 8px; border: 0; background: #2563eb; color: #fff; cursor: pointer; }
+  button.secondary { background: #e5e7eb; color: #111; }
+  label { display: block; margin-bottom: 8px; }
+  pre { white-space: pre-wrap; word-break: break-all; margin: 4px 0 0; }
+</style>
+</head>
+<body>
+<main>
+  <div id="log"></div>
+  <form id="f">
+    <textarea id="q" placeholder="Ask… e.g. 把 3.5 英里换成公里 / create /notes/todo.md with 3 items / what is 17*23?"></textarea>
+    <button type="submit" id="send">Send</button>
+    <button type="button" class="secondary" id="stop">Stop</button>
+  </form>
+</main>
+<aside>
+  <label>API key or token<br><input id="key" placeholder="rk_… (or sign in on an app host)" style="width:100%"></label>
+  <label>Base URL<br><input id="base" value="http://localhost:8080" style="width:100%"></label>
+  <label>Model<br><select id="model"><option>DeepSeek</option><option>Claude Sonnet 4.6</option><option>GPT-5.5</option><option>Gemini 3 Flash</option><option>Kimi K3</option></select></label>
+  <label>Skills zip URL<br><input id="skills" value="./skills.zip" style="width:100%"></label>
+  <label>Session id<br><input id="sid" value="demo" style="width:100%"></label>
+  <button type="button" class="secondary" id="reset">New agent</button>
+  <button type="button" class="secondary" id="files">List workspace</button>
+  <h4>Status</h4>
+  <div id="status">idle</div>
+  <h4>Usage</h4>
+  <pre id="usage"></pre>
+  <h4>Workspace</h4>
+  <pre id="ws"></pre>
+</aside>
+<script type="module">
+const $ = (id) => document.getElementById(id);
+let client, agent, ws;
+const log = (cls, text) => { const d = document.createElement("div"); d.className = cls; d.textContent = text; $("log").append(d); $("log").scrollTop = 1e9; return d; };
+
+async function setup() {
+  let key = $("key").value.trim();
+  if (!key) { try { key = (await (await fetch("./key.json")).json()).key; $("key").value = key; } catch {} }
+  client = new RunApps({ apiKey: key || undefined, baseURL: $("base").value.trim() || undefined });
+  ws = await client.workspace({ id: $("sid").value.trim() || "demo", project: "agent-demo", skills: $("skills").value.trim() || undefined });
+  ws.mount("/doc", RunApps.memoryFS({ "/plan.md": "# Q3 plan\n- hire 2 engineers\n- ship v2\n" }, { description: "the open document" }));
+  agent = client.agent({ model: $("model").value, workspace: ws, appName: "Agent demo", instructions: "You are the assistant inside a notes app." });
+  let bubble = null;
+  agent.on("run_start", () => { $("status").textContent = "running…"; bubble = null; });
+  agent.on("text_delta", (e) => { if (!bubble) bubble = log("msg assistant", ""); bubble.textContent = e.text; });
+  agent.on("message_end", () => { bubble = null; });
+  agent.on("message_reset", () => { if (bubble) bubble.remove(); bubble = null; });
+  agent.on("tool_start", (e) => log("tool", `→ ${e.name}(${JSON.stringify(e.args).slice(0, 200)})`));
+  agent.on("tool_end", (e) => log(`tool ${e.status}`, `← ${e.name} [${e.status}] ${e.result.slice(0, 300).replace(/\n/g, " ⏎ ")}`));
+  agent.on("compaction", (e) => log("tool", `compaction: dropped ${e.droppedTurns} turns, elided ${e.elidedResults} results`));
+  agent.on("run_end", (r) => { $("status").textContent = `${r.reason}${r.error ? ": " + r.error.message : ""}`; $("usage").textContent = JSON.stringify(r.usage, null, 1); listFiles(); });
+  const skills = await ws.skills();
+  log("tool", `workspace ${ws.dbName}; skills: ${skills.map((s) => s.name).join(", ") || "none"}`);
+  listFiles();
+}
+async function listFiles() { const files = await ws.list("/"); $("ws").textContent = files.map((f) => `${f.path} (${f.size})`).join("\n"); }
+
+$("f").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const q = $("q").value.trim(); if (!q) return;
+  if (!agent) await setup();
+  $("q").value = "";
+  log("msg user", q);
+  if (agent.busy) { agent.steer(q); log("tool", "(queued as steering)"); return; }
+  await agent.prompt(q);
+});
+$("stop").addEventListener("click", () => agent?.abort());
+$("reset").addEventListener("click", async () => { agent = null; $("log").innerHTML = ""; await setup(); });
+$("files").addEventListener("click", () => listFiles());
+$("model").addEventListener("change", () => { if (agent) agent.model = $("model").value; });
+</script>
+</body>
+</html>
