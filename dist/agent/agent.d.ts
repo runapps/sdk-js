@@ -2,7 +2,7 @@ import type { RunApps } from "../client.js";
 import type { ChatMessage, ContentPart } from "../chat.js";
 import type { Unsubscribe } from "../events.js";
 import type { AgentEventMap, AgentEventName, AgentOptions, AgentUI, AgentUsage, RunResult, SessionData, Tool } from "./types.js";
-import type { Workspace } from "./workspace.js";
+import { type Workspace } from "./workspace.js";
 export type PromptContent = string | ContentPart[];
 type Handler<K extends AgentEventName> = (event: AgentEventMap[K]) => void;
 type AnyHandler = (name: AgentEventName, event: AgentEventMap[AgentEventName]) => void;
@@ -26,7 +26,14 @@ export declare class Agent {
     private inputTokens;
     private lastBatches;
     private loopWarned;
+    private readonly loaded;
+    private createdAt;
+    private readonly persist;
     constructor(client: RunApps, opts?: AgentOptions);
+    private applySession;
+    /** Resolves once a saved session (if any) has been loaded. */
+    ready(): Promise<void>;
+    private saveSession;
     on<K extends AgentEventName>(name: K, handler: Handler<K>): Unsubscribe;
     on(name: "*", handler: AnyHandler): Unsubscribe;
     private emit;
@@ -63,6 +70,17 @@ export declare class Agent {
     private start;
     private drainFollowUps;
     private run;
+    /** The system prompt for the next request (what the model is told). */
+    systemPrompt(): Promise<string>;
+    /**
+     * Summarises the older turns into a checkpoint now (the loop does this
+     * by itself when the window is nearly full). Resolves true when a
+     * summary replaced older turns.
+     */
+    compact(): Promise<boolean>;
+    private compactWith;
+    /** `/skill:name args` and `/template args` in a user message. */
+    private expandSlashes;
     /** One model call with retries for transient failures. */
     private callModel;
     private runBatch;
@@ -77,6 +95,8 @@ export declare class Agent {
     private withSkillPrefaces;
     /** Tokens the next request would send (estimate), for status displays. */
     estimateContext(): number;
+    /** The model's context window in tokens (from the catalogue). */
+    contextWindow(): Promise<number>;
 }
 export {};
 //# sourceMappingURL=agent.d.ts.map

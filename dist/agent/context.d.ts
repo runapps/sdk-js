@@ -8,8 +8,13 @@ export interface SystemPromptInput {
     skills: Skill[];
     hasSandbox: boolean;
     hasAskUser: boolean;
+    /** The workspace has write_file/edit_file (memory notes can be kept). */
+    canWrite: boolean;
+    /** `/AGENTS.md` from the workspace, when present. */
+    agentsMd?: string;
+    /** `/memory/notes.md` from the workspace, when present. */
+    memory?: string;
     droppedTurns: number;
-    /** Skills the user invoked for this conversation (their bodies go in the user turn). */
     now?: Date;
 }
 export declare function buildSystemPrompt(input: SystemPromptInput): string;

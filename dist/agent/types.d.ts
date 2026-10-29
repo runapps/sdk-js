@@ -1,6 +1,7 @@
 import type { ChatMessage, ContentPart, PromptInput } from "../chat.js";
 import type { Usage } from "../types.js";
 import type { Agent } from "./agent.js";
+import type { CompactionSettings, CutPlan } from "./compaction.js";
 import type { Workspace } from "./workspace.js";
 /** A JSON Schema object (draft 7 / 2020-12 subset — see json-schema.ts). */
 export type JSONSchema = Record<string, unknown>;
@@ -207,10 +208,18 @@ export interface AgentEventMap {
         turn: number;
         usage?: Usage;
     };
+    /** The transcript was shortened: by a model-written summary (`summary: true`) or by eliding/dropping. */
     compaction: {
-        runId: string;
+        runId?: string;
+        summary: boolean;
+        tokensBefore: number;
+        tokensAfter: number;
         droppedTurns: number;
         elidedResults: number;
+    };
+    /** The session was written to the workspace. */
+    session_saved: {
+        id: string;
     };
     queued: {
         kind: "steer" | "followUp";
@@ -231,11 +240,25 @@ export interface ToolCallHookEvent {
     tool: Tool;
 }
 export interface SessionData {
-    v: 1;
+    v: 1 | 2;
+    /** The agent's id (v2). */
+    id?: string;
+    /** The first user message, shortened (v2). */
+    title?: string;
     model?: string;
     messages: ChatMessage[];
     usage: AgentUsage;
     droppedTurns: number;
+    createdAt?: number;
+    savedAt: number;
+}
+/** What a workspace lists for each saved session. */
+export interface SessionSummary {
+    id: string;
+    title: string;
+    model?: string;
+    messages: number;
+    createdAt: number;
     savedAt: number;
 }
 export interface AgentOptions {
@@ -301,9 +324,20 @@ export interface AgentOptions {
     /** The `ask_user` tool (default on). */
     askUser?: boolean;
     /**
-     * Session id, for saving and telling agents apart (default: a random
-     * id). The same id with `restore` continues a conversation.
+     * Session id (default: a random id). With a workspace, an agent whose
+     * id has a saved session continues it, and every turn is saved under
+     * it (`persist: false` turns that off).
      */
     id?: string;
+    /** Save the session in the workspace after every turn (default true when there is a workspace). */
+    persist?: boolean;
+    /**
+     * When the transcript nears the model's window, older turns are
+     * summarised by the model (pi-style checkpoint) and replaced by the
+     * summary; the newest turns stay verbatim. `false` falls back to
+     * eliding old tool results and dropping old turns; an object tunes
+     * the thresholds; a function writes the summary itself.
+     */
+    compaction?: false | Partial<CompactionSettings> | ((plan: CutPlan, agent: Agent) => Promise<string>);
 }
 //# sourceMappingURL=types.d.ts.map

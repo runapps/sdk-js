@@ -9,8 +9,10 @@ import type { ChatCompletionParams, ChatMessage, ChatToolCall, ContentPart } fro
 import { APIError } from "../errors.js";
 import type { Usage } from "../types.js";
 import type { Unsubscribe } from "../events.js";
+import { planCut, resolveSettings, shouldCompact, summaryMessage, summaryOf, summarizationMessages, type CompactionSettings } from "./compaction.js";
 import { collectCompletion } from "./completion.js";
 import { buildSystemPrompt, estimateTokens, fitBudget } from "./context.js";
+import { expandSlash } from "./templates.js";
 import { fileTools } from "./file-tools.js";
 import { validateSchema } from "./json-schema.js";
 import { sandboxTool } from "./sandbox.js";
@@ -28,12 +30,14 @@ import type {
   ToolStatus,
 } from "./types.js";
 import { askUserTool, domUI } from "./ui.js";
-import type { Workspace } from "./workspace.js";
+import { titleOf, type Workspace } from "./workspace.js";
 
 const DEFAULT_MAX_TURNS = 20;
 const DEFAULT_MAX_TOKENS = 8192;
 const DEFAULT_INPUT_TOKENS = 128_000;
-const BUDGET_SHARE = 0.8;
+const MEMORY_PATH = "/memory/notes.md";
+const AGENTS_PATH = "/AGENTS.md";
+const MAX_NOTES_CHARS = 6000;
 const MAX_RETRIES = 3;
 const LOOP_WARN = 3;
 const LOOP_STOP = 6;
@@ -69,6 +73,9 @@ export class Agent {
   private inputTokens: Promise<number> | null = null;
   private lastBatches: string[] = [];
   private loopWarned = false;
+  private readonly loaded: Promise<void>;
+  private createdAt = Date.now();
+  private readonly persist: boolean;
 
   constructor(client: RunApps, opts: AgentOptions = {}) {
     this.client = client;
@@ -92,12 +99,42 @@ export class Agent {
     if (opts.serverTools?.length && (opts.tools?.length || this.workspace || opts.sandbox !== false || opts.askUser !== false)) {
       throw new Error("runapps agent: serverTools work only for an agent with no tools of its own (tools: [], workspace: null, sandbox: false, askUser: false) — the gateway runs that loop");
     }
+    this.persist = !!this.workspace && opts.persist !== false;
     if (opts.restore) {
-      if (opts.restore.v !== 1) throw new Error("runapps agent: unknown session format");
-      this.history = opts.restore.messages.slice();
-      this.committed = this.history.length;
-      this.droppedTurns = opts.restore.droppedTurns ?? 0;
-      this._usage = { ...opts.restore.usage };
+      this.applySession(opts.restore);
+      this.loaded = Promise.resolve();
+    } else if (this.persist && opts.id) {
+      // An id names a session: continue it when the workspace has one.
+      this.loaded = this.workspace!.sessions.get(opts.id).then((saved) => {
+        if (saved) this.applySession(saved);
+      }).catch(() => undefined);
+    } else {
+      this.loaded = Promise.resolve();
+    }
+  }
+
+  private applySession(data: SessionData): void {
+    if (data.v !== 1 && data.v !== 2) throw new Error("runapps agent: unknown session format");
+    this.history = data.messages.slice();
+    this.committed = this.history.length;
+    this.droppedTurns = data.droppedTurns ?? 0;
+    this._usage = { ...data.usage };
+    this.createdAt = data.createdAt ?? data.savedAt ?? Date.now();
+    if (data.model && !this.opts.model) this.opts.model = data.model;
+  }
+
+  /** Resolves once a saved session (if any) has been loaded. */
+  ready(): Promise<void> {
+    return this.loaded;
+  }
+
+  private async saveSession(): Promise<void> {
+    if (!this.persist || !this.workspace) return;
+    try {
+      await this.workspace.sessions.save(this.export());
+      this.emit("session_saved", { id: this.id });
+    } catch (err) {
+      console.warn("[runapps agent] could not save the session:", err);
     }
   }
 
@@ -154,14 +191,19 @@ export class Agent {
 
   /** A snapshot to save (`restore` continues it). Taken at the last complete turn. */
   export(): SessionData {
-    return {
-      v: 1,
+    const messages = this.history.slice(0, this.committed);
+    const data: SessionData = {
+      v: 2,
+      id: this.id,
       model: this.opts.model,
-      messages: this.history.slice(0, this.committed),
+      messages,
       usage: { ...this._usage },
       droppedTurns: this.droppedTurns,
+      createdAt: this.createdAt,
       savedAt: Date.now(),
     };
+    data.title = titleOf(data);
+    return data;
   }
 
   /** Forgets the conversation (the workspace stays). */
@@ -256,21 +298,22 @@ export class Agent {
   /* ---------------- the loop ---------------- */
 
   private async run(message: ChatMessage, controller: AbortController): Promise<RunResult> {
+    await this.loaded;
     const runId = `run_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
     const signal = controller.signal;
-    const usageBefore = { ...this._usage };
     let reason: RunEndReason = "done";
     let error: Error | undefined;
     let lastText = "";
     let truncatedRounds = 0;
 
-    const prefaced = await this.withSkillPrefaces(message);
+    const prefaced = await this.withSkillPrefaces(await this.expandSlashes(message));
     this.history.push(prefaced);
     this.emit("run_start", { runId, message: prefaced });
 
     const maxTurns = this.opts.maxTurns ?? DEFAULT_MAX_TURNS;
     const maxTokens = this.opts.maxTokens ?? DEFAULT_MAX_TOKENS;
-    const budget = Math.floor((await this.contextTokens()) * BUDGET_SHARE);
+    const window = await this.contextTokens();
+    const compaction = resolveSettings(window, typeof this.opts.compaction === "object" ? this.opts.compaction : {});
 
     try {
       for (let turn = 1; ; turn++) {
@@ -282,21 +325,26 @@ export class Agent {
         for (const q of this.queue.filter((q) => q.kind === "steer")) this.history.push(q.message);
         this.queue = this.queue.filter((q) => q.kind !== "steer");
 
-        const system = buildSystemPrompt({
-          appName: this.opts.appName,
-          instructions: typeof this.opts.instructions === "function" ? this.opts.instructions() : this.opts.instructions,
-          tools: this.tools,
-          workspaceDescription: this.workspace ? this.workspace.describe() : undefined,
-          skills: this.workspace ? await this.workspace.skills() : [],
-          hasSandbox: this.tools.some((t) => t.name === "run_js"),
-          hasAskUser: this.tools.some((t) => t.name === "ask_user"),
-          droppedTurns: this.droppedTurns,
-        });
-        const fit = fitBudget(this.history, { budget, keepTurns: this.opts.keepTurns ?? 4, system });
-        if (fit.droppedTurns || fit.elidedResults) {
-          this.history = fit.messages;
-          this.droppedTurns += fit.droppedTurns;
-          this.emit("compaction", { runId, droppedTurns: fit.droppedTurns, elidedResults: fit.elidedResults });
+        const system = await this.systemPrompt();
+        // Context management, pi-style: summarise older turns when the
+        // window is nearly full; elide/drop as the fallback.
+        const tokensBefore = estimateTokens(this.history, system);
+        if (shouldCompact(tokensBefore, window, compaction)) {
+          const summarized = this.opts.compaction === false ? false : await this.compactWith(compaction, runId, signal);
+          const after = estimateTokens(this.history, system);
+          if (!summarized || shouldCompact(after, window, compaction)) {
+            // Trim, keeping a compaction summary at the front pinned: it
+            // is the memory of everything already dropped.
+            const pinned = this.history.length && summaryOf(this.history[0]!) !== null ? [this.history[0]!] : [];
+            const rest = this.history.slice(pinned.length);
+            const fit = fitBudget(rest, { budget: window - compaction.reserveTokens - estimateTokens(pinned), keepTurns: this.opts.keepTurns ?? 4, system });
+            if (fit.droppedTurns || fit.elidedResults) {
+              this.history = [...pinned, ...fit.messages];
+              this.droppedTurns += fit.droppedTurns;
+              this.committed = Math.min(this.committed, this.history.length);
+              this.emit("compaction", { runId, summary: false, tokensBefore: after, tokensAfter: estimateTokens(this.history, system), droppedTurns: fit.droppedTurns, elidedResults: fit.elidedResults });
+            }
+          }
         }
 
         const params: ChatCompletionParams = {
@@ -325,6 +373,7 @@ export class Agent {
         const calls = assistant.tool_calls ?? [];
         if (!calls.length) {
           this.committed = this.history.length;
+          await this.saveSession();
           if (truncated && this.balanceLimited(completion.usage, maxTokens)) {
             reason = "error";
             error = new APIError(402, "insufficient_balance", "runapps agent: the reply was cut short because the balance could not cover a full answer; top up to continue");
@@ -334,6 +383,7 @@ export class Agent {
 
         const results = await this.runBatch(calls, runId, signal, truncated);
         this.committed = this.history.length;
+        await this.saveSession();
         if (signal.aborted) { reason = "aborted"; break; }
         if (truncated) {
           truncatedRounds++;
@@ -373,6 +423,7 @@ export class Agent {
     this.committed = this.history.length;
     this.lastBatches = [];
     this.loopWarned = false;
+    await this.saveSession();
     const result: RunResult = {
       runId,
       reason,
@@ -380,9 +431,87 @@ export class Agent {
       usage: this.usage,
       ...(error ? { error } : {}),
     };
-    void usageBefore;
     this.emit("run_end", result);
     return result;
+  }
+
+  /** The system prompt for the next request (what the model is told). */
+  async systemPrompt(): Promise<string> {
+    const ws = this.workspace;
+    const readOpt = async (path: string, max: number) => {
+      if (!ws) return undefined;
+      try {
+        const t = await ws.readText(path);
+        return t.length > max ? t.slice(t.length - max) : t;
+      } catch {
+        return undefined;
+      }
+    };
+    return buildSystemPrompt({
+      appName: this.opts.appName,
+      instructions: typeof this.opts.instructions === "function" ? this.opts.instructions() : this.opts.instructions,
+      tools: this.tools,
+      workspaceDescription: ws ? ws.describe() : undefined,
+      skills: ws ? await ws.skills() : [],
+      hasSandbox: this.tools.some((t) => t.name === "run_js"),
+      hasAskUser: this.tools.some((t) => t.name === "ask_user"),
+      canWrite: this.tools.some((t) => t.name === "write_file" || t.name === "edit_file"),
+      agentsMd: await readOpt(AGENTS_PATH, 20_000),
+      memory: await readOpt(MEMORY_PATH, MAX_NOTES_CHARS),
+      droppedTurns: this.droppedTurns,
+    });
+  }
+
+  /**
+   * Summarises the older turns into a checkpoint now (the loop does this
+   * by itself when the window is nearly full). Resolves true when a
+   * summary replaced older turns.
+   */
+  async compact(): Promise<boolean> {
+    if (this.current) throw new Error("runapps agent: cannot compact while a run is active");
+    const window = await this.contextTokens();
+    const settings = resolveSettings(window, typeof this.opts.compaction === "object" ? this.opts.compaction : {});
+    const done = await this.compactWith(settings, undefined, new AbortController().signal);
+    if (done) await this.saveSession();
+    return done;
+  }
+
+  private async compactWith(settings: CompactionSettings, runId: string | undefined, signal: AbortSignal): Promise<boolean> {
+    const plan = planCut(this.history, settings.keepRecentTokens);
+    if (!plan) return false;
+    const tokensBefore = estimateTokens(this.history);
+    let summary: string;
+    try {
+      if (typeof this.opts.compaction === "function") {
+        summary = await this.opts.compaction(plan, this);
+      } else {
+        const res = await this.client.chat.create(
+          { model: this.opts.model ?? "", messages: summarizationMessages(plan.toSummarize, plan.previousSummary), max_tokens: this.opts.maxTokens ?? DEFAULT_MAX_TOKENS },
+          { signal },
+        );
+        if (res.usage) this.addUsage(res.usage);
+        const choice = res.choices[0];
+        if (!choice || choice.finish_reason === "length") throw new Error("the summary is incomplete");
+        if (choice.message.tool_calls?.length) throw new Error("the summariser attempted to call a tool");
+        summary = (choice.message.content ?? "").trim();
+        if (!summary) throw new Error("empty summary");
+      }
+    } catch (err) {
+      if (signal.aborted) throw err;
+      console.warn("[runapps agent] compaction summary failed, falling back to trimming:", err);
+      return false;
+    }
+    this.history = [summaryMessage(summary), ...plan.kept];
+    this.committed = this.history.length;
+    this.emit("compaction", { runId, summary: true, tokensBefore, tokensAfter: estimateTokens(this.history), droppedTurns: 0, elidedResults: 0 });
+    return true;
+  }
+
+  /** `/skill:name args` and `/template args` in a user message. */
+  private async expandSlashes(message: ChatMessage): Promise<ChatMessage> {
+    if (!this.workspace || typeof message.content !== "string" || !message.content.startsWith("/")) return message;
+    const expanded = await expandSlash(this.workspace, message.content);
+    return expanded === message.content ? message : { role: "user", content: expanded };
   }
 
   /** One model call with retries for transient failures. */
@@ -446,15 +575,18 @@ export class Agent {
     };
 
     if (signal.aborted) return finish("skipped", "Skipped: the user stopped the run.");
+    if (truncated) {
+      // pi: nothing from a reply cut by the output limit runs.
+      this.emit("tool_start", { runId, id, name, args: call.function.arguments });
+      return finish("error", `Tool call "${name}" was not executed: the response hit the output token limit, so its arguments may be truncated. Re-issue the tool call with complete arguments.`);
+    }
     const tool = this.tools.find((t) => t.name === name);
     let args: unknown;
     try {
       args = call.function.arguments.trim() ? JSON.parse(call.function.arguments) : {};
     } catch {
       this.emit("tool_start", { runId, id, name, args: call.function.arguments });
-      return finish("error", truncated
-        ? "Error: the arguments were cut off because the reply hit the output limit. Make smaller calls (for example, write the file in parts)."
-        : "Error: the arguments are not valid JSON.");
+      return finish("error", "Error: the arguments are not valid JSON.");
     }
     this.emit("tool_start", { runId, id, name, args });
     if (!tool) return finish("error", `Error: there is no tool named "${name}". Available tools: ${this.tools.map((t) => t.name).join(", ")}.`);
@@ -578,6 +710,11 @@ export class Agent {
   /** Tokens the next request would send (estimate), for status displays. */
   estimateContext(): number {
     return estimateTokens(this.history);
+  }
+
+  /** The model's context window in tokens (from the catalogue). */
+  contextWindow(): Promise<number> {
+    return this.contextTokens();
   }
 }
 

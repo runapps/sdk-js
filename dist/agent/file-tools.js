@@ -2,16 +2,18 @@
 // ranges), write, edit (exact replacement), delete, search. Their
 // descriptions are what the model reads, so they say what each does and
 // what comes back.
+import { applyEdits } from "./edit.js";
 import { defineTool } from "./tool.js";
-import { normalizePath } from "./workspace.js";
-const MAX_LIST = 400;
+import { decodeText, normalizePath } from "./workspace.js";
+const MAX_LIST = 500;
 const MAX_READ_LINES = 2000;
-const MAX_SEARCH_HITS = 60;
+const MAX_READ_BYTES = 50 * 1024;
+const MAX_SEARCH_HITS = 100;
 export function fileTools(ws) {
     return [
         defineTool({
             name: "list_files",
-            description: "List the files under a folder of the workspace (recursive), one per line with the size in bytes. Start at / to see everything; /skills holds the skills.",
+            description: "List the files under a folder of the workspace (recursive), one per line with the size in bytes. Output is truncated to 500 entries. Start at / to see everything; /skills holds the skills.",
             parameters: {
                 type: "object",
                 properties: { path: { type: "string", description: "Folder to list. Default /" } },
@@ -23,24 +25,24 @@ export function fileTools(ws) {
                     return `No files under ${normalizePath(path || "/")}.`;
                 const lines = files.slice(0, MAX_LIST).map((f) => `${f.path}  (${f.size} B)`);
                 if (files.length > MAX_LIST)
-                    lines.push(`… ${files.length - MAX_LIST} more; list a sub-folder.`);
+                    lines.push(`\n[${MAX_LIST} entries limit reached (${files.length} in all). List a sub-folder.]`);
                 return lines.join("\n");
             },
         }),
         defineTool({
             name: "read_file",
-            description: "Read a text file from the workspace. Returns the whole file, or the lines from start_line to end_line (1-based, inclusive) for long files. Binary files are described, not returned.",
+            description: "Read the contents of a text file in the workspace. Output is truncated to 2000 lines or 50KB (whichever is hit first). Use offset/limit for large files; when you need the full file, continue with offset until complete. Reading a folder lists it.",
             parameters: {
                 type: "object",
                 properties: {
-                    path: { type: "string" },
-                    start_line: { type: "integer", minimum: 1 },
-                    end_line: { type: "integer", minimum: 1 },
+                    path: { type: "string", description: "Absolute path in the workspace" },
+                    offset: { type: "integer", minimum: 1, description: "Line number to start reading from (1-indexed)" },
+                    limit: { type: "integer", minimum: 1, description: "Maximum number of lines to read" },
                 },
                 required: ["path"],
                 additionalProperties: false,
             },
-            async execute({ path, start_line, end_line }) {
+            async execute({ path, offset, limit }) {
                 if (await ws.isFolder(path)) {
                     const files = await ws.list(path);
                     return `${normalizePath(path)} is a folder with ${files.length} file${files.length === 1 ? "" : "s"}:\n` +
@@ -51,21 +53,37 @@ export function fileTools(ws) {
                 if (typeof data === "string")
                     text = data;
                 else {
-                    const { decodeText } = await import("./workspace.js");
                     const t = decodeText(data);
                     if (t === null)
                         return `${normalizePath(path)} is a binary file (${contentType ?? "unknown type"}, ${size} bytes).`;
                     text = t;
                 }
                 const lines = text.split("\n");
-                if (start_line === undefined && end_line === undefined && lines.length <= MAX_READ_LINES)
-                    return text;
-                const from = Math.max(1, start_line ?? 1);
-                const to = Math.min(lines.length, end_line ?? from + MAX_READ_LINES - 1);
-                if (from > lines.length)
-                    return `The file has ${lines.length} lines; start_line ${from} is past the end.`;
-                const slice = lines.slice(from - 1, to).join("\n");
-                return `[${normalizePath(path)}: lines ${from}-${to} of ${lines.length}]\n${slice}`;
+                const total = lines.length;
+                const start = Math.max(1, offset ?? 1);
+                if (start > total)
+                    return `Offset ${start} is beyond end of file (${total} lines total)`;
+                const want = limit !== undefined ? Math.min(limit, MAX_READ_LINES) : MAX_READ_LINES;
+                const out = [];
+                let bytes = 0;
+                let end = start - 1;
+                for (let i = start - 1; i < total && out.length < want; i++) {
+                    const b = new TextEncoder().encode(lines[i]).byteLength + 1;
+                    if (bytes + b > MAX_READ_BYTES && out.length > 0)
+                        break;
+                    out.push(lines[i]);
+                    bytes += b;
+                    end = i + 1;
+                }
+                let notice = "";
+                if (end < total) {
+                    const next = end + 1;
+                    if (bytes >= MAX_READ_BYTES || (limit === undefined && out.length >= MAX_READ_LINES))
+                        notice = `\n\n[Showing lines ${start}-${end} of ${total}${bytes >= MAX_READ_BYTES ? " (50.0KB limit)" : ""}. Use offset=${next} to continue.]`;
+                    else
+                        notice = `\n\n[${total - end} more lines in file. Use offset=${next} to continue.]`;
+                }
+                return out.join("\n") + notice;
             },
         }),
         defineTool({
@@ -85,22 +103,57 @@ export function fileTools(ws) {
         }),
         defineTool({
             name: "edit_file",
-            description: "Replace one exact occurrence of old_text in a workspace file with new_text. old_text must match exactly once, whitespace included; include enough surrounding lines to make it unique. Use an empty new_text to delete the passage.",
+            description: "Edit a single file using exact text replacement. Every edits[].oldText must match a unique, non-overlapping region of the original file. If two changes affect the same block or nearby lines, merge them into one edit instead of emitting overlapping edits. Do not include large unchanged regions just to connect distant changes.",
             parameters: {
                 type: "object",
-                properties: { path: { type: "string" }, old_text: { type: "string", minLength: 1 }, new_text: { type: "string" } },
-                required: ["path", "old_text", "new_text"],
+                properties: {
+                    path: { type: "string", description: "Absolute path in the workspace" },
+                    edits: {
+                        type: "array",
+                        minItems: 1,
+                        description: "One or more targeted replacements. Each edit is matched against the original file, not incrementally. Do not include overlapping or nested edits.",
+                        items: {
+                            type: "object",
+                            properties: {
+                                oldText: { type: "string", description: "Exact text for one targeted replacement. It must be unique in the original file." },
+                                newText: { type: "string", description: "Replacement text for this targeted edit." },
+                            },
+                            required: ["oldText", "newText"],
+                            additionalProperties: false,
+                        },
+                    },
+                    oldText: { type: "string", description: "Shorthand for a single edit" },
+                    newText: { type: "string" },
+                },
+                required: ["path"],
                 additionalProperties: false,
             },
-            async execute({ path, old_text, new_text }) {
-                const text = await ws.readText(path);
-                const count = text.split(old_text).length - 1;
-                if (count === 0)
-                    throw new Error(`old_text was not found in ${normalizePath(path)}. Read the file and copy the passage exactly.`);
-                if (count > 1)
-                    throw new Error(`old_text occurs ${count} times in ${normalizePath(path)}; include more context so it matches once.`);
-                await ws.write(path, text.replace(old_text, () => new_text));
-                return `Edited ${normalizePath(path)}.`;
+            guidelines: [
+                "Use edit_file for precise changes (oldText must match exactly); when changing several places in one file, use one edit_file call with several entries in edits[].",
+                "Keep oldText as small as possible while still being unique in the file.",
+            ],
+            async execute(args) {
+                const p = normalizePath(args.path);
+                let edits = [];
+                if (typeof args.edits === "string") {
+                    try {
+                        edits = JSON.parse(args.edits);
+                    }
+                    catch {
+                        throw new Error("Edit tool input is invalid. edits must be an array of {oldText, newText}.");
+                    }
+                }
+                else if (Array.isArray(args.edits))
+                    edits = args.edits;
+                else if (args.edits && typeof args.edits === "object")
+                    edits = [args.edits];
+                const single = args.oldText ?? args.old_text;
+                if (single !== undefined)
+                    edits.push({ oldText: single, newText: args.newText ?? args.new_text ?? "" });
+                const text = await ws.readText(p);
+                const next = applyEdits(p, text, edits);
+                await ws.write(p, next);
+                return `Successfully replaced ${edits.length} block(s) in ${p}.`;
             },
         }),
         defineTool({
@@ -121,7 +174,7 @@ export function fileTools(ws) {
         }),
         defineTool({
             name: "search_files",
-            description: "Search the text files of the workspace for a string (or a regular expression with regex: true). Returns matching lines as path:line: text, at most 60.",
+            description: "Search the text files of the workspace for a pattern (a literal string, or a regular expression with regex: true). Returns matching lines as path:line: text, at most 100; long lines are cut to 200 chars.",
             parameters: {
                 type: "object",
                 properties: {
@@ -163,8 +216,8 @@ export function fileTools(ws) {
                         break;
                 }
                 if (!hits.length)
-                    return `No matches for ${JSON.stringify(query)} in ${scanned} text files.`;
-                return hits.join("\n") + (hits.length >= MAX_SEARCH_HITS ? `\n… stopped at ${MAX_SEARCH_HITS} matches; narrow the search.` : "");
+                    return `No matches found (${scanned} text files searched).`;
+                return hits.join("\n") + (hits.length >= MAX_SEARCH_HITS ? `\n\n[${MAX_SEARCH_HITS} matches limit reached. Refine the pattern or search a sub-folder.]` : "");
             },
         }),
     ];

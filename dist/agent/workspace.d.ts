@@ -1,7 +1,15 @@
 import type { RunApps } from "../client.js";
-import type { AgentFS, FileStat, Skill } from "./types.js";
+import type { AgentFS, FileStat, SessionData, SessionSummary, Skill } from "./types.js";
 import { type Inflate } from "./zip.js";
 export declare const SKILLS_ROOT = "/skills";
+/** Saved agent sessions of a workspace (`workspace.sessions`). */
+export interface SessionStore {
+    /** Newest first. */
+    list(): Promise<SessionSummary[]>;
+    get(id: string): Promise<SessionData | null>;
+    save(data: SessionData): Promise<void>;
+    delete(id: string): Promise<void>;
+}
 export interface WorkspaceOptions {
     /**
      * Session id: workspaces with different ids are separate databases;
@@ -41,6 +49,8 @@ export declare class Workspace {
     private readonly idb;
     private skillCache;
     private opened;
+    /** The agent sessions saved in this workspace. */
+    readonly sessions: SessionStore;
     constructor(client: RunApps | null, opts?: WorkspaceOptions);
     /** Opens the database and brings the skills layer up to date. */
     static open(client: RunApps | null, opts?: WorkspaceOptions): Promise<Workspace>;
@@ -87,6 +97,8 @@ export declare function normalizePath(path: string): string;
 export declare function guessType(path: string, data: string | Uint8Array): string;
 /** UTF-8 text of `bytes`, or null when it is not text. */
 export declare function decodeText(bytes: Uint8Array): string | null;
+/** A title for a session without one: its first user message, shortened. */
+export declare function titleOf(d: SessionData): string;
 /** Runs fn holding the origin-wide Web Lock `name`; without Web Locks it just runs fn. */
 export declare function withLock<T>(name: string, fn: () => Promise<T>): Promise<T>;
 /** An in-memory AgentFS, for tests and for documents an app builds on the fly. */

@@ -199,9 +199,10 @@ test("file tools — list, read with ranges, write, edit exactly once, search, d
   await tools.write_file.execute({ path: "/a.md", content: "line1\nline2\nline3" }, ctx);
   assert.match(await tools.list_files.execute({}, ctx), /\/a.md  \(17 B\)/);
   assert.equal(await tools.read_file.execute({ path: "/a.md" }, ctx), "line1\nline2\nline3");
-  assert.match(await tools.read_file.execute({ path: "/a.md", start_line: 2, end_line: 2 }, ctx), /lines 2-2 of 3\]\nline2$/);
-  await assert.rejects(tools.edit_file.execute({ path: "/a.md", old_text: "line", new_text: "L" }, ctx), /occurs 3 times/);
-  await tools.edit_file.execute({ path: "/a.md", old_text: "line2", new_text: "LINE2" }, ctx);
+  assert.equal(await tools.read_file.execute({ path: "/a.md", offset: 2, limit: 1 }, ctx), "line2\n\n[1 more lines in file. Use offset=3 to continue.]");
+  assert.match(await tools.read_file.execute({ path: "/a.md", offset: 9 }, ctx), /beyond end of file \(3 lines total\)/);
+  await assert.rejects(tools.edit_file.execute({ path: "/a.md", oldText: "line", newText: "L" }, ctx), /Found 3 occurrences/);
+  await tools.edit_file.execute({ path: "/a.md", edits: [{ oldText: "line2", newText: "LINE2" }] }, ctx);
   assert.match(await tools.search_files.execute({ query: "LINE" }, ctx), /^\/a.md:2: LINE2$/m);
   assert.equal(tools.delete_file.destructive, true);
   assert.equal(tools.delete_file.confirm({ path: "a.md" }), "Delete /a.md?");

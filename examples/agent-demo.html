@@ -28,7 +28,7 @@
 <main>
   <div id="log"></div>
   <form id="f">
-    <textarea id="q" placeholder="Ask… e.g. 把 3.5 英里换成公里 / create /notes/todo.md with 3 items / what is 17*23?"></textarea>
+    <textarea id="q" placeholder="Ask… e.g. 把 3.5 英里换成公里 / create /notes/todo.md with 3 items / what is 17*23? / /skill:unit-convert 10 lb to kg / remember that I like dark mode"></textarea>
     <button type="submit" id="send">Send</button>
     <button type="button" class="secondary" id="stop">Stop</button>
   </form>
@@ -38,9 +38,12 @@
   <label>Base URL<br><input id="base" value="http://localhost:8080" style="width:100%"></label>
   <label>Model<br><select id="model"><option>DeepSeek</option><option>Claude Sonnet 4.6</option><option>GPT-5.5</option><option>Gemini 3 Flash</option><option>Kimi K3</option></select></label>
   <label>Skills zip URL<br><input id="skills" value="./skills.zip" style="width:100%"></label>
-  <label>Session id<br><input id="sid" value="demo" style="width:100%"></label>
+  <label>Session id<br><input id="sid" placeholder="(blank = new conversation)" style="width:100%"></label>
   <button type="button" class="secondary" id="reset">New agent</button>
   <button type="button" class="secondary" id="files">List workspace</button>
+  <button type="button" class="secondary" id="compact">Compact now</button>
+  <h4>Sessions <small>(click to resume)</small></h4>
+  <div id="sessions" style="font-size:12px"></div>
   <h4>Status</h4>
   <div id="status">idle</div>
   <h4>Usage</h4>
@@ -57,9 +60,14 @@ async function setup() {
   let key = $("key").value.trim();
   if (!key) { try { key = (await (await fetch("./key.json")).json()).key; $("key").value = key; } catch {} }
   client = new RunApps({ apiKey: key || undefined, baseURL: $("base").value.trim() || undefined });
-  ws = await client.workspace({ id: $("sid").value.trim() || "demo", project: "agent-demo", skills: $("skills").value.trim() || undefined });
+  ws = await client.workspace({ id: "demo", project: "agent-demo", skills: $("skills").value.trim() || undefined });
   ws.mount("/doc", RunApps.memoryFS({ "/plan.md": "# Q3 plan\n- hire 2 engineers\n- ship v2\n" }, { description: "the open document" }));
-  agent = client.agent({ model: $("model").value, workspace: ws, appName: "Agent demo", instructions: "You are the assistant inside a notes app." });
+  agent = client.agent({ model: $("model").value, id: $("sid").value.trim() || undefined, workspace: ws, appName: "Agent demo", instructions: "You are the assistant inside a notes app." });
+  await agent.ready();
+  for (const m of agent.messages) {
+    if (m.role === "user" && typeof m.content === "string") log("msg user", m.content.length > 400 ? m.content.slice(0, 400) + "…" : m.content);
+    else if (m.role === "assistant" && typeof m.content === "string" && m.content) log("msg assistant", m.content);
+  }
   let bubble = null;
   agent.on("run_start", () => { $("status").textContent = "running…"; bubble = null; });
   agent.on("text_delta", (e) => { if (!bubble) bubble = log("msg assistant", ""); bubble.textContent = e.text; });
@@ -67,11 +75,27 @@ async function setup() {
   agent.on("message_reset", () => { if (bubble) bubble.remove(); bubble = null; });
   agent.on("tool_start", (e) => log("tool", `→ ${e.name}(${JSON.stringify(e.args).slice(0, 200)})`));
   agent.on("tool_end", (e) => log(`tool ${e.status}`, `← ${e.name} [${e.status}] ${e.result.slice(0, 300).replace(/\n/g, " ⏎ ")}`));
-  agent.on("compaction", (e) => log("tool", `compaction: dropped ${e.droppedTurns} turns, elided ${e.elidedResults} results`));
+  agent.on("compaction", (e) => log("tool", `compaction: ${e.summary ? "summary written" : "trimmed"}, ${e.tokensBefore}→${e.tokensAfter} tokens, dropped ${e.droppedTurns} turns, elided ${e.elidedResults} results`));
+  agent.on("session_saved", () => listSessions());
   agent.on("run_end", (r) => { $("status").textContent = `${r.reason}${r.error ? ": " + r.error.message : ""}`; $("usage").textContent = JSON.stringify(r.usage, null, 1); listFiles(); });
   const skills = await ws.skills();
   log("tool", `workspace ${ws.dbName}; skills: ${skills.map((s) => s.name).join(", ") || "none"}`);
   listFiles();
+  listSessions();
+}
+async function listSessions() {
+  const list = await ws.sessions.list();
+  const box = $("sessions");
+  box.innerHTML = "";
+  for (const s of list) {
+    const b = document.createElement("button");
+    b.className = "secondary";
+    b.style.cssText = "display:block;width:100%;text-align:left;margin:2px 0;padding:4px 8px;font-size:12px";
+    b.textContent = `${s.title} · ${s.messages} msgs · ${new Date(s.savedAt).toLocaleTimeString()}`;
+    b.onclick = async () => { $("sid").value = s.id; agent = null; $("log").innerHTML = ""; await setup(); };
+    box.append(b);
+  }
+  if (!list.length) box.textContent = "(none)";
 }
 async function listFiles() { const files = await ws.list("/"); $("ws").textContent = files.map((f) => `${f.path} (${f.size})`).join("\n"); }
 
@@ -87,6 +111,7 @@ $("f").addEventListener("submit", async (e) => {
 $("stop").addEventListener("click", () => agent?.abort());
 $("reset").addEventListener("click", async () => { agent = null; $("log").innerHTML = ""; await setup(); });
 $("files").addEventListener("click", () => listFiles());
+$("compact").addEventListener("click", async () => { if (!agent) await setup(); const ok = await agent.compact(); log("tool", ok ? "compacted" : "nothing to compact yet"); });
 $("model").addEventListener("change", () => { if (agent) agent.model = $("model").value; });
 </script>
 </body>

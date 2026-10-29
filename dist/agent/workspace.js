@@ -20,6 +20,29 @@ export class Workspace {
     idb;
     skillCache = null;
     opened = null;
+    /** The agent sessions saved in this workspace. */
+    sessions = {
+        list: async () => {
+            await this.ready();
+            return (await this.store.listSessions())
+                .map((d) => ({ id: d.id ?? "", title: d.title ?? titleOf(d), model: d.model, messages: d.messages.length, createdAt: d.createdAt ?? d.savedAt, savedAt: d.savedAt }))
+                .sort((a, b) => b.savedAt - a.savedAt);
+        },
+        get: async (id) => {
+            await this.ready();
+            return (await this.store.getSession(id)) ?? null;
+        },
+        save: async (data) => {
+            await this.ready();
+            if (!data.id)
+                throw new Error("runapps agent: a session needs an id to be saved");
+            await this.store.putSession(data);
+        },
+        delete: async (id) => {
+            await this.ready();
+            await this.store.deleteSession(id);
+        },
+    };
     constructor(client, opts = {}) {
         this.client = client;
         this.id = opts.id || "default";
@@ -396,13 +419,15 @@ function zipBaseName(source) {
 /* ------------------------------------------------------------------ */
 function openIDBStore(idb, name) {
     return new Promise((resolve, reject) => {
-        const req = idb.open(name, 1);
+        const req = idb.open(name, 2);
         req.onupgradeneeded = () => {
             const db = req.result;
             if (!db.objectStoreNames.contains("files"))
                 db.createObjectStore("files", { keyPath: "path" });
             if (!db.objectStoreNames.contains("meta"))
                 db.createObjectStore("meta", { keyPath: "key" });
+            if (!db.objectStoreNames.contains("sessions"))
+                db.createObjectStore("sessions", { keyPath: "id" });
         };
         req.onerror = () => reject(req.error ?? new Error("indexedDB open failed"));
         req.onblocked = () => reject(new Error("indexedDB open blocked"));
@@ -421,6 +446,10 @@ function openIDBStore(idb, name) {
                 list: (prefix) => run("files", "readonly", (s) => s.getAll(prefix === "/" ? undefined : IDBKeyRange.bound(prefix, prefix + "￿", false, false))),
                 getMeta: async (key) => (await run("meta", "readonly", (s) => s.get(key)))?.value,
                 putMeta: async (key, value) => { await run("meta", "readwrite", (s) => s.put({ key, value })); },
+                getSession: (id) => run("sessions", "readonly", (s) => s.get(id)),
+                putSession: async (data) => { await run("sessions", "readwrite", (s) => s.put(data)); },
+                deleteSession: async (id) => { await run("sessions", "readwrite", (s) => s.delete(id)); },
+                listSessions: () => run("sessions", "readonly", (s) => s.getAll()),
                 close: () => db.close(),
             });
         };
@@ -430,7 +459,7 @@ const memoryStores = new Map();
 function memoryStore(name) {
     let m = memoryStores.get(name);
     if (!m) {
-        m = { files: new Map(), meta: new Map() };
+        m = { files: new Map(), meta: new Map(), sessions: new Map() };
         memoryStores.set(name, m);
     }
     const mem = m;
@@ -441,8 +470,19 @@ function memoryStore(name) {
         list: async (prefix) => [...mem.files.values()].filter((r) => prefix === "/" || r.path.startsWith(prefix)),
         getMeta: async (key) => mem.meta.get(key),
         putMeta: async (key, value) => { mem.meta.set(key, value); },
+        getSession: async (id) => mem.sessions.get(id),
+        putSession: async (data) => { mem.sessions.set(data.id, data); },
+        deleteSession: async (id) => { mem.sessions.delete(id); },
+        listSessions: async () => [...mem.sessions.values()],
         close: () => { },
     };
+}
+/** A title for a session without one: its first user message, shortened. */
+export function titleOf(d) {
+    const first = d.messages.find((m) => m.role === "user");
+    const text = !first ? "" : typeof first.content === "string" ? first.content : (first.content ?? []).map((p) => (p.type === "text" ? p.text : "")).join(" ");
+    const line = text.replace(/\s+/g, " ").trim();
+    return line.length > 80 ? line.slice(0, 77) + "…" : line || "Untitled";
 }
 /** Runs fn holding the origin-wide Web Lock `name`; without Web Locks it just runs fn. */
 export function withLock(name, fn) {

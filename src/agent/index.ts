@@ -2,7 +2,10 @@
 // `defineTool`, the default UI and the built-in tools.
 
 export { Agent, type PromptContent } from "./agent.js";
-export { Workspace, memoryFS, normalizePath, type WorkspaceOptions, type WorkspaceRead } from "./workspace.js";
+export { Workspace, memoryFS, normalizePath, type WorkspaceOptions, type WorkspaceRead, type SessionStore } from "./workspace.js";
+export { planCut, serializeConversation, summaryOf, type CompactionSettings, type CutPlan } from "./compaction.js";
+export { parseCommandArgs, substituteArgs, listTemplates, expandSlash, type PromptTemplate } from "./templates.js";
+export { applyEdits, normalizeForFuzzyMatch, type TextEdit } from "./edit.js";
 export { defineTool, normalizeResult } from "./tool.js";
 export { domUI, nullUI, askUserTool } from "./ui.js";
 export { fileTools } from "./file-tools.js";
@@ -26,6 +29,7 @@ export type {
   RunResult,
   SelectOption,
   SessionData,
+  SessionSummary,
   Skill,
   Tool,
   ToolCallHookEvent,

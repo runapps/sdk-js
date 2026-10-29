@@ -6,7 +6,7 @@
 // scanning `/skills/*/SKILL.md`.
 
 import type { RunApps } from "../client.js";
-import type { AgentFS, FileStat, Skill } from "./types.js";
+import type { AgentFS, FileStat, SessionData, SessionSummary, Skill } from "./types.js";
 import { listZip, readZipEntry, type Inflate, MAX_ZIP_BYTES } from "./zip.js";
 import { parseSkill } from "./skills.js";
 
@@ -32,7 +32,20 @@ interface Store {
   list(prefix: string): Promise<FileRecord[]>;
   getMeta<T>(key: string): Promise<T | undefined>;
   putMeta(key: string, value: unknown): Promise<void>;
+  getSession(id: string): Promise<SessionData | undefined>;
+  putSession(data: SessionData): Promise<void>;
+  deleteSession(id: string): Promise<void>;
+  listSessions(): Promise<SessionData[]>;
   close(): void;
+}
+
+/** Saved agent sessions of a workspace (`workspace.sessions`). */
+export interface SessionStore {
+  /** Newest first. */
+  list(): Promise<SessionSummary[]>;
+  get(id: string): Promise<SessionData | null>;
+  save(data: SessionData): Promise<void>;
+  delete(id: string): Promise<void>;
 }
 
 export interface WorkspaceOptions {
@@ -76,6 +89,29 @@ export class Workspace {
   private readonly idb: IDBFactory | null;
   private skillCache: Skill[] | null = null;
   private opened: Promise<void> | null = null;
+
+  /** The agent sessions saved in this workspace. */
+  readonly sessions: SessionStore = {
+    list: async () => {
+      await this.ready();
+      return (await this.store.listSessions())
+        .map((d) => ({ id: d.id ?? "", title: d.title ?? titleOf(d), model: d.model, messages: d.messages.length, createdAt: d.createdAt ?? d.savedAt, savedAt: d.savedAt }))
+        .sort((a, b) => b.savedAt - a.savedAt);
+    },
+    get: async (id) => {
+      await this.ready();
+      return (await this.store.getSession(id)) ?? null;
+    },
+    save: async (data) => {
+      await this.ready();
+      if (!data.id) throw new Error("runapps agent: a session needs an id to be saved");
+      await this.store.putSession(data);
+    },
+    delete: async (id) => {
+      await this.ready();
+      await this.store.deleteSession(id);
+    },
+  };
 
   constructor(client: RunApps | null, opts: WorkspaceOptions = {}) {
     this.client = client;
@@ -442,17 +478,18 @@ function zipBaseName(source: string): string {
 
 function openIDBStore(idb: IDBFactory, name: string): Promise<Store> {
   return new Promise((resolve, reject) => {
-    const req = idb.open(name, 1);
+    const req = idb.open(name, 2);
     req.onupgradeneeded = () => {
       const db = req.result;
       if (!db.objectStoreNames.contains("files")) db.createObjectStore("files", { keyPath: "path" });
       if (!db.objectStoreNames.contains("meta")) db.createObjectStore("meta", { keyPath: "key" });
+      if (!db.objectStoreNames.contains("sessions")) db.createObjectStore("sessions", { keyPath: "id" });
     };
     req.onerror = () => reject(req.error ?? new Error("indexedDB open failed"));
     req.onblocked = () => reject(new Error("indexedDB open blocked"));
     req.onsuccess = () => {
       const db = req.result;
-      const run = <T,>(store: "files" | "meta", mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRequest<T>): Promise<T> =>
+      const run = <T,>(store: "files" | "meta" | "sessions", mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRequest<T>): Promise<T> =>
         new Promise<T>((res, rej) => {
           const tx = db.transaction(store, mode);
           const r = fn(tx.objectStore(store));
@@ -469,18 +506,22 @@ function openIDBStore(idb: IDBFactory, name: string): Promise<Store> {
           ),
         getMeta: async <T,>(key: string) => (await run<{ key: string; value: T } | undefined>("meta", "readonly", (s) => s.get(key)))?.value,
         putMeta: async (key, value) => { await run("meta", "readwrite", (s) => s.put({ key, value })); },
+        getSession: (id) => run<SessionData | undefined>("sessions", "readonly", (s) => s.get(id)),
+        putSession: async (data) => { await run("sessions", "readwrite", (s) => s.put(data)); },
+        deleteSession: async (id) => { await run("sessions", "readwrite", (s) => s.delete(id)); },
+        listSessions: () => run<SessionData[]>("sessions", "readonly", (s) => s.getAll()),
         close: () => db.close(),
       });
     };
   });
 }
 
-const memoryStores = new Map<string, { files: Map<string, FileRecord>; meta: Map<string, unknown> }>();
+const memoryStores = new Map<string, { files: Map<string, FileRecord>; meta: Map<string, unknown>; sessions: Map<string, SessionData> }>();
 
 function memoryStore(name: string): Store {
   let m = memoryStores.get(name);
   if (!m) {
-    m = { files: new Map(), meta: new Map() };
+    m = { files: new Map(), meta: new Map(), sessions: new Map() };
     memoryStores.set(name, m);
   }
   const mem = m;
@@ -491,8 +532,20 @@ function memoryStore(name: string): Store {
     list: async (prefix) => [...mem.files.values()].filter((r) => prefix === "/" || r.path.startsWith(prefix)),
     getMeta: async <T,>(key: string) => mem.meta.get(key) as T | undefined,
     putMeta: async (key, value) => { mem.meta.set(key, value); },
+    getSession: async (id) => mem.sessions.get(id),
+    putSession: async (data) => { mem.sessions.set(data.id!, data); },
+    deleteSession: async (id) => { mem.sessions.delete(id); },
+    listSessions: async () => [...mem.sessions.values()],
     close: () => {},
   };
+}
+
+/** A title for a session without one: its first user message, shortened. */
+export function titleOf(d: SessionData): string {
+  const first = d.messages.find((m) => m.role === "user");
+  const text = !first ? "" : typeof first.content === "string" ? first.content : (first.content ?? []).map((p) => (p.type === "text" ? p.text : "")).join(" ");
+  const line = text.replace(/\s+/g, " ").trim();
+  return line.length > 80 ? line.slice(0, 77) + "…" : line || "Untitled";
 }
 
 /** Runs fn holding the origin-wide Web Lock `name`; without Web Locks it just runs fn. */

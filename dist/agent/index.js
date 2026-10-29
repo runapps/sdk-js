@@ -2,6 +2,9 @@
 // `defineTool`, the default UI and the built-in tools.
 export { Agent } from "./agent.js";
 export { Workspace, memoryFS, normalizePath } from "./workspace.js";
+export { planCut, serializeConversation, summaryOf } from "./compaction.js";
+export { parseCommandArgs, substituteArgs, listTemplates, expandSlash } from "./templates.js";
+export { applyEdits, normalizeForFuzzyMatch } from "./edit.js";
 export { defineTool, normalizeResult } from "./tool.js";
 export { domUI, nullUI, askUserTool } from "./ui.js";
 export { fileTools } from "./file-tools.js";

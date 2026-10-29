@@ -285,7 +285,8 @@ test("agent — export at a turn boundary and restore continues the conversation
   const agent = client.agent({ model: "m", sandbox: false, askUser: false });
   await agent.prompt("hi");
   const saved = agent.export();
-  assert.equal(saved.v, 1);
+  assert.equal(saved.v, 2);
+  assert.equal(saved.title, "hi");
   assert.equal(saved.messages.length, 2);
   const agent2 = client.agent({ model: "m", sandbox: false, askUser: false, restore: saved });
   await agent2.prompt("more");
