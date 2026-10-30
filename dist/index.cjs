@@ -86,6 +86,7 @@ __export(src_exports, {
   pcm16FromFloat32: () => pcm16FromFloat32,
   planCut: () => planCut,
   readZipEntry: () => readZipEntry,
+  reasoningEffort: () => reasoningEffort,
   requiresField: () => requiresField,
   runInSandbox: () => runInSandbox,
   sandboxTool: () => sandboxTool,
@@ -789,6 +790,14 @@ async function* parseSSE(body, signal) {
 }
 
 // src/models.ts
+var reasoningEffort = (model) => {
+  const inputs = model.options?.inputs;
+  const field = inputs?.reasoning_effort;
+  if (!field) return null;
+  const levels = (field.enum ?? []).filter((v) => typeof v === "string");
+  const def = typeof field.default === "string" ? field.default : void 0;
+  return def ? { levels, default: def } : { levels };
+};
 var hasCapabilityTag = (model, id) => Array.isArray(model.capability_tags) && model.capability_tags.some((t) => t.id === id);
 var acceptsModality = (model, modality) => Array.isArray(model.input_modalities) && model.input_modalities.includes(modality);
 function optBool(model, key) {

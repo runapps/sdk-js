@@ -1,3 +1,21 @@
+/**
+ * The `reasoning_effort` levels a chat model takes and its default
+ * (`undefined`: the upstream's own), or null when it can't think — read
+ * from `options.inputs.reasoning_effort`, for building a selector.
+ *
+ * ```ts
+ * const r = reasoningEffort(model); // { levels: ["none", "low", "high", "max"], default: "low" }
+ * ```
+ */
+export const reasoningEffort = (model) => {
+    const inputs = model.options?.inputs;
+    const field = inputs?.reasoning_effort;
+    if (!field)
+        return null;
+    const levels = (field.enum ?? []).filter((v) => typeof v === "string");
+    const def = typeof field.default === "string" ? field.default : undefined;
+    return def ? { levels, default: def } : { levels };
+};
 /** True iff `model.capability_tags` includes a tag with the given stable ID. */
 export const hasCapabilityTag = (model, id) => Array.isArray(model.capability_tags) &&
     model.capability_tags.some((t) => t.id === id);

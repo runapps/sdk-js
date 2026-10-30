@@ -219,10 +219,10 @@ await client.chat.create({
 
 **Your own tools.** Pass `tools: [{ type: "function", function: { name, description, parameters } }]`, read `choices[0].message.tool_calls`, and answer with `toolResultMessage(toolCallId, output)` on the next turn.
 
-**Thinking.** Models with a thinking switch take it per request: `thinking: { type: "enabled" }` on DeepSeek (off by default here; `reasoning_effort` `low`, `high` or `max`), `enable_thinking: true` on QwenPlus. The reasoning arrives as `reasoning_content`, on the message or on each streamed delta, before the answer, and it counts toward `max_tokens`. In a conversation with tool calls, keep `reasoning_content` on the assistant turns you send back; DeepSeek requires it.
+**Thinking.** One field for every model that can think: `reasoning_effort` — `"none"` answers without thinking, `"minimal"`, `"low"`, `"medium"`, `"high"`, `"xhigh"` or `"max"` thinks that hard, and leaving it out takes the model's default. A level a model doesn't offer becomes its nearest one (`"none"` on a model that always thinks becomes its lightest level). Each model lists its levels and default in `options.inputs.reasoning_effort`, and models that think carry the `reasoning` capability tag. The reasoning arrives as `reasoning_content`, on the message or on each streamed delta, before the answer (OpenAI and Gemini models report only `usage.completion_tokens_details.reasoning_tokens`); it is billed as output and counts toward `max_tokens`. In a conversation with tool calls, keep `reasoning_content` on the assistant turns you send back.
 
 ```ts
-for await (const chunk of client.chat.stream({ model: "DeepSeek", messages, thinking: { type: "enabled" }, max_tokens: 8192 })) {
+for await (const chunk of client.chat.stream({ model: "DeepSeek", messages, reasoning_effort: "high", max_tokens: 8192 })) {
   const d = chunk.choices[0]?.delta;
   if (d?.reasoning_content) showThinking(d.reasoning_content);
   if (d?.content) showAnswer(d.content);

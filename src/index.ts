@@ -87,6 +87,7 @@ export type {
   ChatCompletionChunk,
   PromptRef,
   PromptInput,
+  ReasoningEffort,
 } from "./chat.js";
 export {
   userMessage,
@@ -104,6 +105,7 @@ export {
 export type { Model, ModelListOptions, Tag } from "./models.js";
 export {
   hasCapabilityTag,
+  reasoningEffort,
   acceptsModality,
   supportsVoiceClone,
   supportsInstructText,

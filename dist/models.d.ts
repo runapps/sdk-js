@@ -1,3 +1,4 @@
+import type { ReasoningEffort } from "./chat.js";
 import type { Transport } from "./transport.js";
 /**
  * One model available on the gateway. Pricing is in **pips** (1 USD =
@@ -64,6 +65,19 @@ export interface Tag {
     id: string;
     label: string;
 }
+/**
+ * The `reasoning_effort` levels a chat model takes and its default
+ * (`undefined`: the upstream's own), or null when it can't think — read
+ * from `options.inputs.reasoning_effort`, for building a selector.
+ *
+ * ```ts
+ * const r = reasoningEffort(model); // { levels: ["none", "low", "high", "max"], default: "low" }
+ * ```
+ */
+export declare const reasoningEffort: (model: Model) => {
+    levels: ReasoningEffort[];
+    default?: ReasoningEffort;
+} | null;
 /** True iff `model.capability_tags` includes a tag with the given stable ID. */
 export declare const hasCapabilityTag: (model: Model, id: string) => boolean;
 /**

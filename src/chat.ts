@@ -128,6 +128,9 @@ export const ServerTools = {
   TwitterSearch: "twitter_search",
 } as const;
 
+/** Thinking levels, lightest to deepest; `"none"` answers without thinking. */
+export type ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+
 export interface ChatCompletionParams {
   model: string;
   messages: ChatMessage[];
@@ -170,18 +173,24 @@ export interface ChatCompletionParams {
    */
   prompt?: PromptInput;
   /**
-   * Thinking switch of models that have one. DeepSeek: send
-   * `{ type: "enabled" }` to reason before answering (off by default on
-   * RunApps). The reasoning arrives as `reasoning_content` and counts
-   * toward `max_tokens`, so leave room for it.
+   * The one thinking switch, for every model that can think: `"none"`
+   * answers without thinking, `"minimal"` … `"max"` thinks that hard, and
+   * leaving it out takes the model's default. A level a model doesn't
+   * offer becomes its nearest one; each model lists its levels and
+   * default in `options.inputs.reasoning_effort` (models.list()), and
+   * models that think carry the `reasoning` tag. The reasoning arrives as
+   * `reasoning_content` and counts toward `max_tokens`, so leave room.
+   */
+  reasoning_effort?: ReasoningEffort;
+  /**
+   * @deprecated Use `reasoning_effort` (`"none"` to turn thinking off).
+   * Still passed to the upstream as is.
    */
   thinking?: { type: "enabled" | "disabled" | (string & {}); [extra: string]: unknown };
   /**
-   * How hard a thinking model reasons. DeepSeek takes `low`, `high`
-   * (default) or `max`; other models take their own subset.
+   * @deprecated Use `reasoning_effort` (`"none"` off, `"high"` on).
+   * Still passed to the upstream as is.
    */
-  reasoning_effort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | (string & {});
-  /** Thinking switch of the Qwen models (QwenPlus): `true` to reason first. */
   enable_thinking?: boolean;
   /** Pass-through for provider-specific knobs. */
   [extra: string]: unknown;

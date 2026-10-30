@@ -1,3 +1,4 @@
+import type { ReasoningEffort } from "./chat.js";
 import type { Transport } from "./transport.js";
 
 /**
@@ -66,6 +67,26 @@ export interface Tag {
   id: string;
   label: string;
 }
+
+/**
+ * The `reasoning_effort` levels a chat model takes and its default
+ * (`undefined`: the upstream's own), or null when it can't think — read
+ * from `options.inputs.reasoning_effort`, for building a selector.
+ *
+ * ```ts
+ * const r = reasoningEffort(model); // { levels: ["none", "low", "high", "max"], default: "low" }
+ * ```
+ */
+export const reasoningEffort = (
+  model: Model,
+): { levels: ReasoningEffort[]; default?: ReasoningEffort } | null => {
+  const inputs = (model.options as { inputs?: Record<string, { enum?: unknown[]; default?: unknown }> } | undefined)?.inputs;
+  const field = inputs?.reasoning_effort;
+  if (!field) return null;
+  const levels = (field.enum ?? []).filter((v): v is ReasoningEffort => typeof v === "string");
+  const def = typeof field.default === "string" ? (field.default as ReasoningEffort) : undefined;
+  return def ? { levels, default: def } : { levels };
+};
 
 /** True iff `model.capability_tags` includes a tag with the given stable ID. */
 export const hasCapabilityTag = (model: Model, id: string): boolean =>
