@@ -18,6 +18,13 @@ export interface ChatMessage {
   name?: string;
   tool_call_id?: string;
   tool_calls?: ChatToolCall[];
+  /**
+   * The reasoning a thinking model returned with this assistant turn.
+   * Send it back on assistant turns that made tool calls: DeepSeek in
+   * thinking mode requires it for every later request in the
+   * conversation. Elsewhere it is ignored.
+   */
+  reasoning_content?: string;
 }
 
 /** One block inside a multi-modal message content array.
@@ -162,6 +169,20 @@ export interface ChatCompletionParams {
    * only from the app's creator.
    */
   prompt?: PromptInput;
+  /**
+   * Thinking switch of models that have one. DeepSeek: send
+   * `{ type: "enabled" }` to reason before answering (off by default on
+   * RunApps). The reasoning arrives as `reasoning_content` and counts
+   * toward `max_tokens`, so leave room for it.
+   */
+  thinking?: { type: "enabled" | "disabled" | (string & {}); [extra: string]: unknown };
+  /**
+   * How hard a thinking model reasons. DeepSeek takes `low`, `high`
+   * (default) or `max`; other models take their own subset.
+   */
+  reasoning_effort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | (string & {});
+  /** Thinking switch of the Qwen models (QwenPlus): `true` to reason first. */
+  enable_thinking?: boolean;
   /** Pass-through for provider-specific knobs. */
   [extra: string]: unknown;
 }
@@ -184,6 +205,9 @@ export interface ChatChoiceMessage {
   role: string;
   content: string | null;
   tool_calls?: ChatToolCall[];
+  /** Reasoning a thinking model produced before the answer (DeepSeek-style). */
+  reasoning_content?: string;
+  reasoning?: string;
 }
 
 export interface ChatChoice {

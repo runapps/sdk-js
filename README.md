@@ -219,6 +219,16 @@ await client.chat.create({
 
 **Your own tools.** Pass `tools: [{ type: "function", function: { name, description, parameters } }]`, read `choices[0].message.tool_calls`, and answer with `toolResultMessage(toolCallId, output)` on the next turn.
 
+**Thinking.** Models with a thinking switch take it per request: `thinking: { type: "enabled" }` on DeepSeek (off by default here; `reasoning_effort` `low`, `high` or `max`), `enable_thinking: true` on QwenPlus. The reasoning arrives as `reasoning_content`, on the message or on each streamed delta, before the answer, and it counts toward `max_tokens`. In a conversation with tool calls, keep `reasoning_content` on the assistant turns you send back; DeepSeek requires it.
+
+```ts
+for await (const chunk of client.chat.stream({ model: "DeepSeek", messages, thinking: { type: "enabled" }, max_tokens: 8192 })) {
+  const d = chunk.choices[0]?.delta;
+  if (d?.reasoning_content) showThinking(d.reasoning_content);
+  if (d?.content) showAnswer(d.content);
+}
+```
+
 **Structured outputs.** `response_format` makes the reply JSON that matches a schema; it works on Claude (sent as `output_config.format`) as well as OpenAI-style models. Add `strict: true` to a tool to guarantee its arguments match `parameters`.
 
 ```ts
