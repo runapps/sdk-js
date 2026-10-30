@@ -7,8 +7,6 @@ import { RealtimeService } from "./realtime.js";
 import { VideoService } from "./video.js";
 import { FilesService } from "./files.js";
 import { EmbeddingsService } from "./embeddings.js";
-import { Agent } from "./agent/agent.js";
-import { Workspace } from "./agent/workspace.js";
 import { AssetsService } from "./assets.js";
 import { AppsService } from "./apps.js";
 import { BrowserAuth } from "./browser-auth.js";
@@ -57,7 +55,7 @@ export class RunApps {
      *  send this one — see `AppsService`. */
     apps;
     transport;
-    /** The `project` option, when given (scopes workspaces). */
+    /** The `project` option, when given (read by @runappsai/agent to scope workspaces). */
     projectName;
     /**
      * Browser auth helper, populated only when `authProvider: "runapps"`.
@@ -202,20 +200,6 @@ export class RunApps {
      * platform enabled for them (e.g. "seedance_asset_verify"), so an app
      * shows a gated control only to those who have it.
      */
-    /**
-     * An agent: the model ↔ tool loop with your tools, a workspace of
-     * files and skills, and your dialogs. See the README section "Agents".
-     */
-    agent(opts = {}) {
-        return new Agent(this, opts);
-    }
-    /**
-     * A workspace for agents: a file tree in IndexedDB with skills unpacked
-     * from zip(s). Resolves once the skills are in place.
-     */
-    workspace(opts = {}) {
-        return Workspace.open(this, { project: this.projectName, ...opts });
-    }
     me(init) {
         return this.transport.getJSON("/v1/me", init);
     }
