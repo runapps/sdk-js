@@ -57,6 +57,7 @@ export class ChatService {
     async create(params, init) {
         const body = { ...params, stream: false };
         return wrapEvents(this.events, { model: params.model, capability: "text" }, () => this.transport.postJSON("/v1/chat/completions", body, init), (r) => ({
+            model: r.model,
             totalTokens: r.usage?.completion_tokens,
             costUSD: r.usage?.total_cost,
             finishReason: r.choices?.[0]?.finish_reason,
@@ -92,6 +93,7 @@ export class ChatService {
             yield* parseSSE(resp.body, init?.signal);
         }.bind(this);
         yield* wrapStream(this.events, { model: params.model, capability: "text" }, sourceGen, (chunk) => ({
+            model: chunk.model,
             deltaText: chunk.choices?.[0]?.delta?.content ?? "",
             completionTokens: chunk.usage?.completion_tokens,
             costUSD: chunk.usage?.total_cost,

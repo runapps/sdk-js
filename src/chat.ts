@@ -132,7 +132,9 @@ export const ServerTools = {
 export type ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
 export interface ChatCompletionParams {
-  model: string;
+  /** Catalogue name; left out, the gateway runs the user's preferred
+   *  model, else the platform default (`is_default` in the catalogue). */
+  model?: string;
   messages: ChatMessage[];
   temperature?: number;
   top_p?: number;
@@ -339,6 +341,7 @@ export class ChatService {
           init,
         ),
       (r) => ({
+        model: r.model,
         totalTokens: r.usage?.completion_tokens,
         costUSD: r.usage?.total_cost,
         finishReason: r.choices?.[0]?.finish_reason,
@@ -387,6 +390,7 @@ export class ChatService {
       { model: params.model, capability: "text" },
       sourceGen,
       (chunk) => ({
+        model: chunk.model,
         deltaText: chunk.choices?.[0]?.delta?.content ?? "",
         completionTokens: chunk.usage?.completion_tokens,
         costUSD: chunk.usage?.total_cost,

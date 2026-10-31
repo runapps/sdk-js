@@ -32,7 +32,9 @@ export type SDKCapability = "text" | "vision" | "embedding" | "image_generation"
 export interface RequestStartEvent {
     /** Stable id correlating start → end/error events for one call. */
     id: string;
-    /** Model name the caller asked for (NOT the upstream id). */
+    /** Model name the caller asked for (NOT the upstream id); a call that
+     *  named none says "default model" until its end event, which carries
+     *  the catalogue name the gateway answered with. */
     model: string;
     /** Capability bucket — drives badge icon / colour. */
     capability: SDKCapability;

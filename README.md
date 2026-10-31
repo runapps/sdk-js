@@ -197,7 +197,7 @@ Never put an `rk_…` key in a frontend; an app on RunApps creates its client wi
 
 ## Chat
 
-`POST /v1/chat/completions` follows the OpenAI format, streaming or not. If you leave out `model`, the user's default model is used, then the platform's. `usage.total_cost` is the charge in USD; when streaming, the last chunk carries `usage`.
+`POST /v1/chat/completions` follows the OpenAI format, streaming or not. If you leave out `model`, the user's default model is used, then the platform's; the response's `model` (every chunk's, when streaming) names the one that ran, and the badge shows that name once the call ends. `usage.total_cost` is the charge in USD; when streaming, the last chunk carries `usage`.
 
 ```ts
 for await (const chunk of client.chat.stream({ model: "Gemini 3 Flash", messages })) {

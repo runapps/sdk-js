@@ -9,10 +9,15 @@
  */
 import { type SDKCapability, type SDKEvents } from "./events.js";
 interface CallMeta {
-    model: string;
+    /** The model the caller named; undefined leaves the choice to the gateway. */
+    model: string | undefined;
     capability: SDKCapability;
 }
+/** What a call that named no model shows while the gateway's answer is pending. */
+export declare const DEFAULT_MODEL_LABEL = "default model";
 interface EndInfo {
+    /** The model the response says ran — shown when the caller named none. */
+    model?: string;
     totalTokens?: number;
     costUSD?: number;
     finishReason?: string;
@@ -50,6 +55,8 @@ export declare function estimateTokens(text: string): number;
  *     (chunk) => ({ deltaText: chunk.choices[0]?.delta?.content, usage: chunk.usage }));
  */
 export declare function wrapStream<TChunk>(events: SDKEvents, meta: CallMeta, source: () => AsyncIterable<TChunk>, extractDelta: (chunk: TChunk) => {
+    /** The model the chunk says ran — shown when the caller named none. */
+    model?: string;
     deltaText?: string;
     completionTokens?: number;
     costUSD?: number;

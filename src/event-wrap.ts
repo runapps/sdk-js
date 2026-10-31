@@ -11,11 +11,23 @@
 import { newRequestId, type SDKCapability, type SDKEvents } from "./events.js";
 
 interface CallMeta {
-  model: string;
+  /** The model the caller named; undefined leaves the choice to the gateway. */
+  model: string | undefined;
   capability: SDKCapability;
 }
 
+/** What a call that named no model shows while the gateway's answer is pending. */
+export const DEFAULT_MODEL_LABEL = "default model";
+
+/** The model name events carry: the one asked for, else the one the
+ *  response reports, else the placeholder. */
+function modelLabel(meta: CallMeta, reported?: string): string {
+  return meta.model || reported || DEFAULT_MODEL_LABEL;
+}
+
 interface EndInfo {
+  /** The model the response says ran — shown when the caller named none. */
+  model?: string;
   totalTokens?: number;
   costUSD?: number;
   finishReason?: string;
@@ -40,7 +52,7 @@ export async function wrapEvents<T>(
   const startedAt = Date.now();
   events.emit("request:start", {
     id,
-    model: meta.model,
+    model: modelLabel(meta),
     capability: meta.capability,
     startedAt,
     streaming: false,
@@ -50,7 +62,7 @@ export async function wrapEvents<T>(
     const info = extractEnd ? extractEnd(result) : {};
     events.emit("request:end", {
       id,
-      model: meta.model,
+      model: modelLabel(meta, info.model),
       capability: meta.capability,
       latencyMs: Date.now() - startedAt,
       totalTokens: info.totalTokens ?? 0,
@@ -62,7 +74,7 @@ export async function wrapEvents<T>(
     const e = err as Error & { statusCode?: number };
     events.emit("request:error", {
       id,
-      model: meta.model,
+      model: modelLabel(meta),
       capability: meta.capability,
       latencyMs: Date.now() - startedAt,
       error: e,
@@ -103,6 +115,8 @@ export async function* wrapStream<TChunk>(
   meta: CallMeta,
   source: () => AsyncIterable<TChunk>,
   extractDelta: (chunk: TChunk) => {
+    /** The model the chunk says ran — shown when the caller named none. */
+    model?: string;
     deltaText?: string;
     // When a chunk carries cumulative usage (final chunk in OpenAI
     // streams), surface it so the end event can use exact totals
@@ -116,11 +130,12 @@ export async function* wrapStream<TChunk>(
   const startedAt = Date.now();
   events.emit("request:start", {
     id,
-    model: meta.model,
+    model: modelLabel(meta),
     capability: meta.capability,
     startedAt,
     streaming: true,
   });
+  let reportedModel: string | undefined;
   let totalTokens = 0;
   let lastUsageTokens: number | undefined;
   let costUSD: number | undefined;
@@ -128,6 +143,7 @@ export async function* wrapStream<TChunk>(
   try {
     for await (const chunk of source()) {
       const info = extractDelta(chunk);
+      if (info.model) reportedModel = info.model;
       if (info.deltaText) {
         const delta = estimateTokens(info.deltaText);
         totalTokens += delta;
@@ -144,7 +160,7 @@ export async function* wrapStream<TChunk>(
     }
     events.emit("request:end", {
       id,
-      model: meta.model,
+      model: modelLabel(meta, reportedModel),
       capability: meta.capability,
       latencyMs: Date.now() - startedAt,
       // Prefer the exact upstream count over our heuristic when it
@@ -157,7 +173,7 @@ export async function* wrapStream<TChunk>(
     const e = err as Error & { statusCode?: number };
     events.emit("request:error", {
       id,
-      model: meta.model,
+      model: modelLabel(meta, reportedModel),
       capability: meta.capability,
       latencyMs: Date.now() - startedAt,
       error: e,

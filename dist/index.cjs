@@ -406,12 +406,16 @@ function newRequestId() {
 }
 
 // src/event-wrap.ts
+var DEFAULT_MODEL_LABEL = "default model";
+function modelLabel(meta, reported) {
+  return meta.model || reported || DEFAULT_MODEL_LABEL;
+}
 async function wrapEvents(events, meta, fn, extractEnd) {
   const id = newRequestId();
   const startedAt = Date.now();
   events.emit("request:start", {
     id,
-    model: meta.model,
+    model: modelLabel(meta),
     capability: meta.capability,
     startedAt,
     streaming: false
@@ -421,7 +425,7 @@ async function wrapEvents(events, meta, fn, extractEnd) {
     const info = extractEnd ? extractEnd(result) : {};
     events.emit("request:end", {
       id,
-      model: meta.model,
+      model: modelLabel(meta, info.model),
       capability: meta.capability,
       latencyMs: Date.now() - startedAt,
       totalTokens: info.totalTokens ?? 0,
@@ -433,7 +437,7 @@ async function wrapEvents(events, meta, fn, extractEnd) {
     const e = err;
     events.emit("request:error", {
       id,
-      model: meta.model,
+      model: modelLabel(meta),
       capability: meta.capability,
       latencyMs: Date.now() - startedAt,
       error: e,
@@ -451,11 +455,12 @@ async function* wrapStream(events, meta, source, extractDelta) {
   const startedAt = Date.now();
   events.emit("request:start", {
     id,
-    model: meta.model,
+    model: modelLabel(meta),
     capability: meta.capability,
     startedAt,
     streaming: true
   });
+  let reportedModel;
   let totalTokens = 0;
   let lastUsageTokens;
   let costUSD;
@@ -463,6 +468,7 @@ async function* wrapStream(events, meta, source, extractDelta) {
   try {
     for await (const chunk of source()) {
       const info = extractDelta(chunk);
+      if (info.model) reportedModel = info.model;
       if (info.deltaText) {
         const delta = estimateTokens(info.deltaText);
         totalTokens += delta;
@@ -479,7 +485,7 @@ async function* wrapStream(events, meta, source, extractDelta) {
     }
     events.emit("request:end", {
       id,
-      model: meta.model,
+      model: modelLabel(meta, reportedModel),
       capability: meta.capability,
       latencyMs: Date.now() - startedAt,
       // Prefer the exact upstream count over our heuristic when it
@@ -492,7 +498,7 @@ async function* wrapStream(events, meta, source, extractDelta) {
     const e = err;
     events.emit("request:error", {
       id,
-      model: meta.model,
+      model: modelLabel(meta, reportedModel),
       capability: meta.capability,
       latencyMs: Date.now() - startedAt,
       error: e,
@@ -547,6 +553,7 @@ var ChatService = class {
         init
       ),
       (r) => ({
+        model: r.model,
         totalTokens: r.usage?.completion_tokens,
         costUSD: r.usage?.total_cost,
         finishReason: r.choices?.[0]?.finish_reason
@@ -591,6 +598,7 @@ var ChatService = class {
       { model: params.model, capability: "text" },
       sourceGen,
       (chunk) => ({
+        model: chunk.model,
         deltaText: chunk.choices?.[0]?.delta?.content ?? "",
         completionTokens: chunk.usage?.completion_tokens,
         costUSD: chunk.usage?.total_cost,

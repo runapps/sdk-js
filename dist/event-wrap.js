@@ -8,6 +8,13 @@
  * — see `wrapStream` below.
  */
 import { newRequestId } from "./events.js";
+/** What a call that named no model shows while the gateway's answer is pending. */
+export const DEFAULT_MODEL_LABEL = "default model";
+/** The model name events carry: the one asked for, else the one the
+ *  response reports, else the placeholder. */
+function modelLabel(meta, reported) {
+    return meta.model || reported || DEFAULT_MODEL_LABEL;
+}
 /**
  * Run `fn` while emitting start/end/error events around it.
  * `extractEnd` plucks token / cost / finish_reason off the response
@@ -22,7 +29,7 @@ export async function wrapEvents(events, meta, fn, extractEnd) {
     const startedAt = Date.now();
     events.emit("request:start", {
         id,
-        model: meta.model,
+        model: modelLabel(meta),
         capability: meta.capability,
         startedAt,
         streaming: false,
@@ -32,7 +39,7 @@ export async function wrapEvents(events, meta, fn, extractEnd) {
         const info = extractEnd ? extractEnd(result) : {};
         events.emit("request:end", {
             id,
-            model: meta.model,
+            model: modelLabel(meta, info.model),
             capability: meta.capability,
             latencyMs: Date.now() - startedAt,
             totalTokens: info.totalTokens ?? 0,
@@ -45,7 +52,7 @@ export async function wrapEvents(events, meta, fn, extractEnd) {
         const e = err;
         events.emit("request:error", {
             id,
-            model: meta.model,
+            model: modelLabel(meta),
             capability: meta.capability,
             latencyMs: Date.now() - startedAt,
             error: e,
@@ -85,11 +92,12 @@ export async function* wrapStream(events, meta, source, extractDelta) {
     const startedAt = Date.now();
     events.emit("request:start", {
         id,
-        model: meta.model,
+        model: modelLabel(meta),
         capability: meta.capability,
         startedAt,
         streaming: true,
     });
+    let reportedModel;
     let totalTokens = 0;
     let lastUsageTokens;
     let costUSD;
@@ -97,6 +105,8 @@ export async function* wrapStream(events, meta, source, extractDelta) {
     try {
         for await (const chunk of source()) {
             const info = extractDelta(chunk);
+            if (info.model)
+                reportedModel = info.model;
             if (info.deltaText) {
                 const delta = estimateTokens(info.deltaText);
                 totalTokens += delta;
@@ -116,7 +126,7 @@ export async function* wrapStream(events, meta, source, extractDelta) {
         }
         events.emit("request:end", {
             id,
-            model: meta.model,
+            model: modelLabel(meta, reportedModel),
             capability: meta.capability,
             latencyMs: Date.now() - startedAt,
             // Prefer the exact upstream count over our heuristic when it
@@ -130,7 +140,7 @@ export async function* wrapStream(events, meta, source, extractDelta) {
         const e = err;
         events.emit("request:error", {
             id,
-            model: meta.model,
+            model: modelLabel(meta, reportedModel),
             capability: meta.capability,
             latencyMs: Date.now() - startedAt,
             error: e,

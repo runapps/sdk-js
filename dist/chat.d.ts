@@ -131,7 +131,9 @@ export declare const ServerTools: {
 /** Thinking levels, lightest to deepest; `"none"` answers without thinking. */
 export type ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 export interface ChatCompletionParams {
-    model: string;
+    /** Catalogue name; left out, the gateway runs the user's preferred
+     *  model, else the platform default (`is_default` in the catalogue). */
+    model?: string;
     messages: ChatMessage[];
     temperature?: number;
     top_p?: number;
