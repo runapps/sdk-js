@@ -77,3 +77,13 @@ test("canPublish reads is_creator for this app", async () => {
   assert.equal(await c.shared.canPublish(), true);
   assert.equal(calls[0].url, "https://www.runapps.ai/v1/me?app=canvas");
 });
+
+test("a Blob is stored with its own type; a named type wins; otherwise the gateway goes by the path", async () => {
+  const calls = [];
+  const c = client(calls, () => new Response("{}", { status: 200 }), () => "rrt_x");
+  await c.files.put("a.jpg", new Blob(["x"], { type: "image/jpeg" }));
+  await c.files.put("a.bin", new Blob(["x"], { type: "image/jpeg" }), { contentType: "image/png" });
+  await c.files.put("a.png", new Blob(["x"]));
+  const types = calls.filter((x) => x.init.method === "PUT").map((x) => x.init.headers["Content-Type"]);
+  assert.deepEqual(types, ["image/jpeg", "image/png", "application/octet-stream"]);
+});

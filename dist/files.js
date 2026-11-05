@@ -12,6 +12,9 @@ function pathToURL(base, p) {
     const trimmed = p.replace(/^\/+/, "");
     return base + "/" + trimmed.split("/").map(encodeURIComponent).join("/");
 }
+function blobType(body) {
+    return typeof Blob !== "undefined" && body instanceof Blob && body.type ? body.type : undefined;
+}
 export class FilesService {
     transport;
     events;
@@ -110,7 +113,8 @@ export class FilesService {
         if (opts?.ifMatch)
             headers["If-Match"] = `"${cleanETag(opts.ifMatch)}"`;
         return this.run("files.put", async () => this.transport.putBytes(pathToURL(await this.base(), path), body, {
-            contentType: opts?.contentType,
+            // A Blob knows its type; with neither, the gateway goes by the path.
+            contentType: opts?.contentType ?? blobType(body),
             headers: Object.keys(headers).length ? headers : undefined,
             signal: opts?.signal,
         }));

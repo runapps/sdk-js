@@ -13,7 +13,7 @@ export interface FileListResult {
     next_cursor?: string;
 }
 export interface PutOptions {
-    /** Override the MIME type guessed from the path extension. */
+    /** The MIME type to store; default the Blob's own, else the path extension's. */
     contentType?: string;
     /** Refuse to overwrite an existing object (gateway returns 409). */
     ifNoneMatch?: boolean;

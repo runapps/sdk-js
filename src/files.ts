@@ -26,7 +26,7 @@ export interface FileListResult {
 }
 
 export interface PutOptions {
-  /** Override the MIME type guessed from the path extension. */
+  /** The MIME type to store; default the Blob's own, else the path extension's. */
   contentType?: string;
   /** Refuse to overwrite an existing object (gateway returns 409). */
   ifNoneMatch?: boolean;
@@ -106,6 +106,10 @@ export interface BatchResult {
 function pathToURL(base: string, p: string): string {
   const trimmed = p.replace(/^\/+/, "");
   return base + "/" + trimmed.split("/").map(encodeURIComponent).join("/");
+}
+
+function blobType(body: BodyInit): string | undefined {
+  return typeof Blob !== "undefined" && body instanceof Blob && body.type ? body.type : undefined;
 }
 
 export class FilesService {
@@ -206,7 +210,8 @@ export class FilesService {
     if (opts?.ifNoneMatch) headers["If-None-Match"] = "*";
     if (opts?.ifMatch) headers["If-Match"] = `"${cleanETag(opts.ifMatch)}"`;
     return this.run("files.put", async () => this.transport.putBytes<FileObject>(pathToURL(await this.base(), path), body, {
-      contentType: opts?.contentType,
+      // A Blob knows its type; with neither, the gateway goes by the path.
+      contentType: opts?.contentType ?? blobType(body),
       headers: Object.keys(headers).length ? headers : undefined,
       signal: opts?.signal,
     }));

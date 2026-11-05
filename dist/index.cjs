@@ -1748,6 +1748,9 @@ function pathToURL(base, p) {
   const trimmed = p.replace(/^\/+/, "");
   return base + "/" + trimmed.split("/").map(encodeURIComponent).join("/");
 }
+function blobType(body) {
+  return typeof Blob !== "undefined" && body instanceof Blob && body.type ? body.type : void 0;
+}
 var FilesService = class {
   constructor(transport, project, events, filesBase) {
     __publicField(this, "transport", transport);
@@ -1829,7 +1832,8 @@ var FilesService = class {
     if (opts?.ifNoneMatch) headers["If-None-Match"] = "*";
     if (opts?.ifMatch) headers["If-Match"] = `"${cleanETag(opts.ifMatch)}"`;
     return this.run("files.put", async () => this.transport.putBytes(pathToURL(await this.base(), path), body, {
-      contentType: opts?.contentType,
+      // A Blob knows its type; with neither, the gateway goes by the path.
+      contentType: opts?.contentType ?? blobType(body),
       headers: Object.keys(headers).length ? headers : void 0,
       signal: opts?.signal
     }));
