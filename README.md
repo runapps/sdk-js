@@ -345,6 +345,37 @@ try {
 
 Paths are at most 900 bytes, and a single file is at most 200 MB.
 
+## Public folder
+
+Each app has one folder that anyone can read, with no token and no sign-in: what its creator keeps under `_public/`. Use it for what you want to give every user and keep updating without uploading a new bundle: templates, presets, skills, data. The structure is yours; the platform only stores files.
+
+```ts
+// Anyone, signed in or not.
+const list = await client.shared.json("templates/index.json");
+const { files, next_cursor } = await client.shared.list({ prefix: "templates/" }); // { path, size, etag, url, … }
+const blob = await client.shared.get("templates/a/project.zip");
+const src = client.shared.url("templates/a/cover.png");    // needs no token: <img src>, fetch(), a model call
+
+// Copy into the signed-in user's own files (the platform does the copying;
+// billed to them as a write). Their copy stays theirs when the original changes.
+await client.shared.copy("templates/a/cover.png", "my/cover.png");
+
+// Another app's folder.
+const skills = await client.shared.of("skill-hub").list({ prefix: "skills/" });
+
+// The creator, signed in to their app.
+if (await client.shared.canPublish()) {
+  const { etag } = await client.files.read("_public/templates/index.json");
+  await client.shared.put("templates/a/project.zip", zipBlob);
+  await client.shared.put("templates/index.json", JSON.stringify(list), { ifMatch: etag });
+  await client.shared.remove("templates/old/project.zip");
+}
+```
+
+An update shows on the next read: a file is served with its ETag and revalidated each time. `_public/` is an ordinary folder of the creator's files, so it also appears on their Storage page and works with `client.files`, a personal key (`PUT /v1/p/<slug>/files/_public/…`) and agents. To update several files at once, write them under a new folder and switch `index.json` last, so a reader never sees half an update.
+
+Everything in the folder is public. Do not put anything there that only some users may see. A file that is an HTML page or an SVG downloads when opened directly; `<img>` and `fetch()` work as usual. What another user puts under `_public/` in their own files is just their own file: only the creator's folder is served. Over HTTP: `GET /v1/apps/<slug>/public/<path>` and `GET /v1/apps/<slug>/public?prefix=&cursor=&limit=`.
+
 ## Sending files to another app
 
 An app can send files to another app on the platform — a canvas sends a clip to a video editor, the editor sends its export on to the canvas or to any other app. Sending is one way, and each app treats what it receives its own way. The apps never share storage: the files travel as links, and the receiving app copies them into its own.
@@ -648,6 +679,7 @@ Every call takes `{ signal }` for cancellation.
 | `client.realtime` | `connect` → session: `on`, `send`, `appendAudio`, `commitAudio`, `mute`, `unmute`, `say`, `cancelResponse`, `update`, `sendFunctionResult`, `close`, `closed` |
 | `client.video` | `generate`, `getStatus`, `wait`, `getContent` |
 | `client.embeddings` | `create` |
+| `client.shared` | `list`, `get`, `text`, `json`, `url`, `copy`, `canPublish`, `put`, `remove`, `of` |
 | `client.apps` | `receivers`, `send`, `onReceive` (→ `importTo`, `blob`, `fromApp`; option `confirm`), `waiting`, `dismiss`, `sendButton`, `offer`, `watchDownloads` |
 
 Browser sign-in: `client.signIn()`, `client.signOut()`, `client.user`, `client.auth`.

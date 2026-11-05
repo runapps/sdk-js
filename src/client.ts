@@ -10,6 +10,7 @@ import { EmbeddingsService } from "./embeddings.js";
 import { AssetsService } from "./assets.js";
 import { AppsService } from "./apps.js";
 import { BrowserAuth, type BrowserUser } from "./browser-auth.js";
+import { SharedService } from "./shared.js";
 import { FilesRemote, SyncEngine, type SyncOptions, type SyncState } from "./sync/index.js";
 import { SDKEvents } from "./events.js";
 
@@ -163,6 +164,9 @@ export class RunApps {
   /** App handoff: send files to another app and receive what other apps
    *  send this one — see `AppsService`. */
   readonly apps: AppsService;
+  /** This app's public folder, and other apps': files the creator publishes
+   *  outside the bundle, readable with no token. */
+  readonly shared: SharedService;
   private readonly transport: Transport;
   /** The `project` option, when given (read by @runappsai/agent to scope workspaces). */
   readonly projectName: string | undefined;
@@ -285,6 +289,7 @@ export class RunApps {
       options.project,
       () => !!options.apiKey || !!options.apiKeyResolver || !!this.auth?.user,
     );
+    this.shared = new SharedService(transport, this.files, options.project);
     this.transport = transport;
 
     // Sync: an app on RunApps gets it unless it says no. It
@@ -346,4 +351,6 @@ export interface Me {
   name: string;
   /** Feature names the platform enabled for this user. */
   features: string[];
+  /** Whether they created the app this client is bound to. */
+  is_creator?: boolean;
 }

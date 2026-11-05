@@ -10,6 +10,7 @@ import { EmbeddingsService } from "./embeddings.js";
 import { AssetsService } from "./assets.js";
 import { AppsService } from "./apps.js";
 import { BrowserAuth } from "./browser-auth.js";
+import { SharedService } from "./shared.js";
 import { FilesRemote, SyncEngine } from "./sync/index.js";
 import { SDKEvents } from "./events.js";
 // The platform, not the bare gateway: personal rk_ keys are checked and
@@ -54,6 +55,9 @@ export class RunApps {
     /** App handoff: send files to another app and receive what other apps
      *  send this one — see `AppsService`. */
     apps;
+    /** This app's public folder, and other apps': files the creator publishes
+     *  outside the bundle, readable with no token. */
+    shared;
     transport;
     /** The `project` option, when given (read by @runappsai/agent to scope workspaces). */
     projectName;
@@ -162,6 +166,7 @@ export class RunApps {
         this.realtime = new RealtimeService(transport, this.events);
         this.assets = new AssetsService(transport);
         this.apps = new AppsService(transport, this.files, options.project, () => !!options.apiKey || !!options.apiKeyResolver || !!this.auth?.user);
+        this.shared = new SharedService(transport, this.files, options.project);
         this.transport = transport;
         // Sync: an app on RunApps gets it unless it says no. It
         // stores under the signed-in user, so only browser sign-in mode has

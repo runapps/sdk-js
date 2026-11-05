@@ -67,6 +67,7 @@ export {
   type SyncDeps,
 } from "./sync/index.js";
 export type { SyncStateEvent, DbChangeEvent } from "./events.js";
+export { SharedService, type SharedFile, type SharedListOptions, type SharedListResult } from "./shared.js";
 export { APIError } from "./errors.js";
 export type { Usage } from "./types.js";
 

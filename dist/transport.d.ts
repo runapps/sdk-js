@@ -100,6 +100,14 @@ export declare class Transport {
         notModified?: boolean;
         serverTime?: number;
     }>;
+    /**
+     * GET with no credentials, for what is public: it sends no Authorization,
+     * so it neither needs a sign-in nor starts one, and is left to the
+     * browser's HTTP cache (unlike the calls above, which never store).
+     */
+    fetchPublic(url: string, init?: {
+        signal?: AbortSignal;
+    }): Promise<Response>;
     /** POST a multipart/form-data body. Used by audio.transcribe and image.edit. */
     postMultipart<T>(path: string, form: FormData, init?: {
         signal?: AbortSignal;

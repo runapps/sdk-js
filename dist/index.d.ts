@@ -12,6 +12,7 @@ export { BrowserAuth, type BrowserAuthOptions, type BrowserUser } from "./browse
 export { AppsService, encodeHandoff, decodeHandoff, parseHandoffPayload, appSlugOf, appOriginFrom, isAppOrigin, isFilesURL, type HandoffAction, type HandoffFile, type HandoffSource, type HandoffPayload, type ReceivedHandoff, type ReceiveAnswer, type ReceiveOptions, type ReceiverApp, type SendOptions, } from "./apps.js";
 export { SyncEngine, FilesRemote, installIndexedDBHook, type SyncOptions, type SyncState, type DbChange, type SyncRemote, type SyncDeps, } from "./sync/index.js";
 export type { SyncStateEvent, DbChangeEvent } from "./events.js";
+export { SharedService, type SharedFile, type SharedListOptions, type SharedListResult } from "./shared.js";
 export { APIError } from "./errors.js";
 export type { Usage } from "./types.js";
 export type { ChatMessage, ContentPart, ChatTool, ChatResponseFormat, StreamOptions, ChatCompletionParams, ChatToolCall, ChatChoiceMessage, ChatChoice, ChatCompletion, ChatChunkDelta, ChatChunkChoice, ChatCompletionChunk, PromptRef, PromptInput, ReasoningEffort, } from "./chat.js";

@@ -149,6 +149,17 @@ export class Transport {
         const etag = cleanETag(resp.headers.get("etag")) || undefined;
         return { data: buf, contentType, etag, serverTime };
     }
+    /**
+     * GET with no credentials, for what is public: it sends no Authorization,
+     * so it neither needs a sign-in nor starts one, and is left to the
+     * browser's HTTP cache (unlike the calls above, which never store).
+     */
+    async fetchPublic(url, init) {
+        const resp = await this.fetchImpl(url, { method: "GET", ...(init?.signal ? { signal: init.signal } : {}) });
+        if (!resp.ok)
+            throw await this.parseError(resp);
+        return resp;
+    }
     /** POST a multipart/form-data body. Used by audio.transcribe and image.edit. */
     async postMultipart(path, form, init) {
         const resp = await this.fetchWithAuthRetry(path, async () => ({

@@ -21,6 +21,7 @@ export { AppsService, encodeHandoff, decodeHandoff, parseHandoffPayload, appSlug
 // RunApps Sync — on by default in apps; exported for status UIs and
 // for tests that drive the engine with their own storage.
 export { SyncEngine, FilesRemote, installIndexedDBHook, } from "./sync/index.js";
+export { SharedService } from "./shared.js";
 export { APIError } from "./errors.js";
 export { userMessage, systemMessage, assistantMessage, toolResultMessage, userMessageParts, textPart, imagePart, videoPart, audioPart, } from "./chat.js";
 export { hasCapabilityTag, reasoningEffort, acceptsModality, supportsVoiceClone, supportsInstructText, defaultVoice, defaultModel, } from "./models.js";

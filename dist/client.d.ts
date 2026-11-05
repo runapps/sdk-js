@@ -9,6 +9,7 @@ import { EmbeddingsService } from "./embeddings.js";
 import { AssetsService } from "./assets.js";
 import { AppsService } from "./apps.js";
 import { BrowserAuth, type BrowserUser } from "./browser-auth.js";
+import { SharedService } from "./shared.js";
 import { type SyncOptions, type SyncState } from "./sync/index.js";
 import { SDKEvents } from "./events.js";
 /**
@@ -152,6 +153,9 @@ export declare class RunApps {
     /** App handoff: send files to another app and receive what other apps
      *  send this one — see `AppsService`. */
     readonly apps: AppsService;
+    /** This app's public folder, and other apps': files the creator publishes
+     *  outside the bundle, readable with no token. */
+    readonly shared: SharedService;
     private readonly transport;
     /** The `project` option, when given (read by @runappsai/agent to scope workspaces). */
     readonly projectName: string | undefined;
@@ -217,5 +221,7 @@ export interface Me {
     name: string;
     /** Feature names the platform enabled for this user. */
     features: string[];
+    /** Whether they created the app this client is bound to. */
+    is_creator?: boolean;
 }
 //# sourceMappingURL=client.d.ts.map
