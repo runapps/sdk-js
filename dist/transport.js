@@ -266,6 +266,9 @@ export class Transport {
                 type = parsed.type;
             if (parsed.message)
                 message = parsed.message;
+            // The gateway's usual shape: {"error": "<message>"}.
+            else if (typeof parsed.error === "string" && parsed.error)
+                message = parsed.error;
             if (typeof parsed.code === "string")
                 code = parsed.code;
             if (typeof parsed.retry_after === "number")

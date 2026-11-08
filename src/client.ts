@@ -11,6 +11,7 @@ import { AssetsService } from "./assets.js";
 import { AppsService } from "./apps.js";
 import { BrowserAuth, type BrowserUser } from "./browser-auth.js";
 import { SharedService } from "./shared.js";
+import { ToolsService, WebService } from "./tools.js";
 import { FilesRemote, SyncEngine, type SyncOptions, type SyncState } from "./sync/index.js";
 import { SDKEvents } from "./events.js";
 
@@ -167,6 +168,10 @@ export class RunApps {
   /** This app's public folder, and other apps': files the creator publishes
    *  outside the bundle, readable with no token. */
   readonly shared: SharedService;
+  /** The platform's tools (web search, reading pages): `list`, `call`, and `chat.create({ platformTools })`. */
+  readonly tools: ToolsService;
+  /** Search and read the web from code. */
+  readonly web: WebService;
   private readonly transport: Transport;
   /** The `project` option, when given (read by @runappsai/agent to scope workspaces). */
   readonly projectName: string | undefined;
@@ -270,7 +275,9 @@ export class RunApps {
     // intentionally don't take it — they're infrastructure, not
     // user-facing LLM calls, and surfacing them would clutter the
     // badge with /v1/models polls.
-    this.chat = new ChatService(transport, this.events);
+    this.tools = new ToolsService(transport, this.events);
+    this.web = new WebService(this.tools);
+    this.chat = new ChatService(transport, this.events, this.tools);
     this.models = new ModelsService(transport);
     this.image = new ImageService(transport, this.events);
     this.audio = new AudioService(transport, this.events);

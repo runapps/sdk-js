@@ -31,6 +31,8 @@ export { RealtimeSession, pcm16FromFloat32, float32FromPCM16, bytesToBase64, bas
 export { AssetsService } from "./assets.js";
 // Media helpers (shared by image + video + chat-multimodal)
 export { encodeImageUrl, decodeMediaUrl } from "./media.js";
+// Platform tools: client.tools, client.web, chat.create({ platformTools }).
+export { ToolsService, WebService } from "./tools.js";
 // Server-tool names for chat.create({ server_tools }), with autocomplete.
 export { ServerTools } from "./chat.js";
 // Lenient JSON parsing of model replies (chat.structured() uses it).

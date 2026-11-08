@@ -3,6 +3,7 @@ import type { Usage } from "./types.js";
 import type { SDKEvents } from "./events.js";
 import { wrapEvents, wrapStream } from "./event-wrap.js";
 import { APIError } from "./errors.js";
+import type { ToolsService, PlatformToolsOption, PlatformToolCallEvent } from "./tools.js";
 
 /* ------------------------------------------------------------------ */
 /* Request types                                                       */
@@ -166,6 +167,20 @@ export interface ChatCompletionParams {
    */
   max_server_iterations?: number;
   /**
+   * Platform tools run in your page (`true`: all of them, or names such
+   * as `["web_search", "web_fetch"]`): their descriptions (`GET /v1/tools`,
+   * cached) are added to `tools`, and whatever the model calls of them is
+   * run (`client.tools.runCalls`) and fed back, round after round, until
+   * it answers or calls one of your own tools. You see each call in
+   * `onToolCall`; the completion's `transcript` holds every message the
+   * rounds added. Not sent to the gateway.
+   */
+  platformTools?: PlatformToolsOption;
+  /** Each platform tool call as it starts and ends (with `platformTools`). */
+  onToolCall?: (ev: PlatformToolCallEvent) => void;
+  /** Most rounds of platform tool calls before the model must answer (default 8). */
+  maxToolRounds?: number;
+  /**
    * One of the app's private prompts, kept out of the browser: the
    * gateway reads `bundle.json (or .private/prompts/)<id>.md` from the app's bundle, fills
    * `{{var}}` placeholders from `vars`, and prepends it as the system
@@ -234,6 +249,15 @@ export interface ChatCompletion {
   model: string;
   choices: ChatChoice[];
   usage: Usage;
+  /**
+   * With `platformTools`: every message the call added to the
+   * conversation — each round's assistant reply with its tool calls and
+   * the platform tools' results, ending with the last reply. Append these
+   * to your history rather than the last message alone. When the last
+   * reply also calls your own tools, its platform calls are already
+   * answered here; answer yours after them.
+   */
+  transcript?: ChatMessage[];
 }
 
 export interface ChatChunkDelta {
@@ -258,6 +282,8 @@ export interface ChatCompletionChunk {
   model: string;
   choices: ChatChunkChoice[];
   usage?: Usage;
+  /** With `platformTools`, on the last chunk: see `ChatCompletion.transcript`. */
+  transcript?: ChatMessage[];
 }
 
 /* ------------------------------------------------------------------ */
@@ -319,14 +345,24 @@ export class ChatService {
   constructor(
     private readonly transport: Transport,
     private readonly events: SDKEvents,
+    private readonly tools?: ToolsService,
   ) {}
 
   /**
    * Create a chat completion (non-streaming).
    *
    * Streaming is forced off — pass `stream()` instead for incremental output.
+   * With `platformTools`, the platform tool rounds run first (see there).
    */
   async create(
+    params: ChatCompletionParams,
+    init?: { signal?: AbortSignal },
+  ): Promise<ChatCompletion> {
+    if (params.platformTools) return this.createWithTools(params, init);
+    return this.createOnce(stripLoopOptions(params), init);
+  }
+
+  private async createOnce(
     params: ChatCompletionParams,
     init?: { signal?: AbortSignal },
   ): Promise<ChatCompletion> {
@@ -369,6 +405,17 @@ export class ChatService {
     params: ChatCompletionParams,
     init?: { signal?: AbortSignal },
   ): AsyncGenerator<ChatCompletionChunk, void, unknown> {
+    if (params.platformTools) {
+      yield* this.streamWithTools(params, init);
+      return;
+    }
+    yield* this.streamOnce(stripLoopOptions(params), init);
+  }
+
+  private async *streamOnce(
+    params: ChatCompletionParams,
+    init?: { signal?: AbortSignal },
+  ): AsyncGenerator<ChatCompletionChunk, void, unknown> {
     const body = {
       ...params,
       stream: true,
@@ -399,6 +446,119 @@ export class ChatService {
     );
   }
 
+  /** The tools offered and the loop's settings, for `platformTools`. */
+  private async toolSetup(params: ChatCompletionParams, signal?: AbortSignal) {
+    if (!this.tools) throw new Error("runapps: platformTools needs a client with tools");
+    const own = new Set((params.tools ?? []).map((t) => t.function.name));
+    const offered = (await this.tools.definitions(params.platformTools ?? true, signal ? { signal } : {})).filter((d) => !own.has(d.function.name));
+    return {
+      offered,
+      names: new Set(offered.map((d) => d.function.name)),
+      rounds: Math.max(0, params.maxToolRounds ?? DEFAULT_TOOL_ROUNDS),
+      base: stripLoopOptions(params),
+    };
+  }
+
+  /** One round's request: the platform tools beside the caller's, none called on the last round. */
+  private roundParams(base: ChatCompletionParams, offered: ChatTool[], messages: ChatMessage[], last: boolean): ChatCompletionParams {
+    const p: ChatCompletionParams = { ...base, messages, tools: [...(base.tools ?? []), ...offered] };
+    if (!p.tools!.length) delete p.tools;
+    // The tools stay defined (earlier rounds' calls refer to them); the model may not call one now.
+    if (last && p.tools) p.tool_choice = "none";
+    return p;
+  }
+
+  private async createWithTools(params: ChatCompletionParams, init?: { signal?: AbortSignal }): Promise<ChatCompletion> {
+    const { offered, names, rounds, base } = await this.toolSetup(params, init?.signal);
+    const messages = [...base.messages];
+    const transcript: ChatMessage[] = [];
+    const total = new UsageSum();
+    for (let round = 0; ; round++) {
+      const completion = await this.createOnce(this.roundParams(base, offered, messages, round >= rounds), init);
+      total.add(completion.usage);
+      const msg = completion.choices[0]?.message;
+      const reply = msg ? assistantTurn(msg) : null;
+      if (reply) transcript.push(reply);
+      const calls = msg?.tool_calls ?? [];
+      const platform = calls.filter((c) => names.has(c.function.name));
+      if (!platform.length || round >= rounds) {
+        return { ...completion, usage: total.usage(), transcript };
+      }
+      messages.push(reply!);
+      const results = await this.tools!.runCalls(platform, { onToolCall: total.counting(params.onToolCall), signal: init?.signal });
+      messages.push(...results);
+      transcript.push(...results);
+      // The model called the caller's tools too: theirs to answer now.
+      if (platform.length < calls.length) return { ...completion, usage: total.usage(), transcript };
+    }
+  }
+
+  private async *streamWithTools(params: ChatCompletionParams, init?: { signal?: AbortSignal }): AsyncGenerator<ChatCompletionChunk, void, unknown> {
+    const { offered, names, rounds, base } = await this.toolSetup(params, init?.signal);
+    const messages = [...base.messages];
+    const transcript: ChatMessage[] = [];
+    const total = new UsageSum();
+    let last: ChatCompletionChunk | undefined;
+    for (let round = 0; ; round++) {
+      // The round's reply as it streams: text, reasoning, and its tool calls by index.
+      let content = "";
+      let reasoning = "";
+      const calls = new Map<number, { id: string; name: string; args: string }>();
+      for await (const chunk of this.streamOnce(this.roundParams(base, offered, messages, round >= rounds), init)) {
+        last = chunk;
+        if (chunk.usage) total.add(chunk.usage);
+        const choice = chunk.choices?.[0];
+        if (!choice) continue; // the usage chunk: the total goes out once, at the end
+        const d = choice.delta ?? {};
+        content += d.content ?? "";
+        reasoning += d.reasoning_content ?? d.reasoning ?? "";
+        let ownDeltas = d.tool_calls;
+        if (d.tool_calls?.length) {
+          ownDeltas = [];
+          for (const tc of d.tool_calls) {
+            const i = tc.index ?? 0;
+            const acc = calls.get(i) ?? { id: "", name: "", args: "" };
+            if (tc.id) acc.id = tc.id;
+            if (tc.function?.name) acc.name += tc.function.name;
+            if (tc.function?.arguments) acc.args += tc.function.arguments;
+            calls.set(i, acc);
+            if (!names.has(acc.name)) ownDeltas.push(tc);
+          }
+        }
+        const platformOnly = [...calls.values()].every((c) => names.has(c.name));
+        const finish = choice.finish_reason;
+        // A round that ends in platform calls only is not the end: hold its finish back.
+        const hideFinish = !!finish && calls.size > 0 && platformOnly && round < rounds;
+        if (!d.content && !d.reasoning_content && !d.reasoning && !(ownDeltas?.length) && !(finish && !hideFinish) && !d.role) continue;
+        const delta: ChatChunkDelta = { ...d };
+        if (ownDeltas?.length) delta.tool_calls = ownDeltas;
+        else delete delta.tool_calls;
+        yield { ...chunk, usage: undefined, choices: [{ ...choice, delta, finish_reason: hideFinish ? null : finish }] };
+      }
+      const all: ChatToolCall[] = [...calls.entries()].sort((a, b) => a[0] - b[0]).map(([, c]) => ({ id: c.id, type: "function", function: { name: c.name, arguments: c.args } }));
+      const reply: ChatMessage = { role: "assistant", content: content || null };
+      if (all.length) reply.tool_calls = all;
+      if (reasoning) reply.reasoning_content = reasoning;
+      transcript.push(reply);
+      const platform = all.filter((c) => names.has(c.function.name));
+      if (!platform.length || round >= rounds) break;
+      messages.push(reply);
+      const results = await this.tools!.runCalls(platform, { onToolCall: total.counting(params.onToolCall), signal: init?.signal });
+      messages.push(...results);
+      transcript.push(...results);
+      if (platform.length < all.length) break;
+    }
+    yield {
+      id: last?.id ?? "",
+      object: "chat.completion.chunk",
+      created: last?.created ?? Math.floor(Date.now() / 1000),
+      model: last?.model ?? params.model ?? "",
+      choices: [],
+      usage: total.usage(),
+      transcript,
+    };
+  }
+
   /**
    * A completion whose answer is a JSON value matching `schema`: asks for
    * it with `response_format: json_schema` and parses the reply, also
@@ -427,6 +587,61 @@ export class ChatService {
       throw new Error(`runapps: the model's reply is not JSON: ${String(text).slice(0, 200)}`);
     }
     return { value, completion };
+  }
+}
+
+const DEFAULT_TOOL_ROUNDS = 8;
+
+/** The SDK-side loop options, which the gateway must not see. */
+function stripLoopOptions(params: ChatCompletionParams): ChatCompletionParams {
+  const { platformTools: _p, onToolCall: _o, maxToolRounds: _m, ...rest } = params;
+  return rest as ChatCompletionParams;
+}
+
+/** A reply as the next request's assistant message. */
+function assistantTurn(msg: ChatChoiceMessage): ChatMessage {
+  const out: ChatMessage = { role: "assistant", content: msg.content ?? null };
+  if (msg.tool_calls?.length) out.tool_calls = msg.tool_calls.map((c) => ({ id: c.id, type: "function", function: { name: c.function.name, arguments: c.function.arguments ?? "" } }));
+  const reasoning = msg.reasoning_content ?? msg.reasoning;
+  if (reasoning) out.reasoning_content = reasoning;
+  return out;
+}
+
+/** Usage summed over the rounds, plus what the platform tools cost. */
+class UsageSum {
+  private u: Usage = { total_cost: 0 };
+  private tools = new Map<string, { count: number; cost: number }>();
+  /** The platform tools' cost, which no round's `total_cost` includes. */
+  private extra = 0;
+  add(u: Usage | undefined): void {
+    if (!u) return;
+    this.u.total_cost += u.total_cost ?? 0;
+    for (const k of ["prompt_tokens", "completion_tokens", "total_tokens"] as const) {
+      if (typeof u[k] === "number") this.u[k] = (this.u[k] ?? 0) + u[k]!;
+    }
+    // The gateway's own server_tools, already in its total_cost.
+    for (const t of u.tool_costs ?? []) this.bump(t.name, t.count, t.cost);
+  }
+  /** Wraps onToolCall so each finished call's cost is counted. */
+  counting(fn?: (ev: PlatformToolCallEvent) => void): (ev: PlatformToolCallEvent) => void {
+    return (ev) => {
+      if (ev.status === "done") {
+        this.bump(ev.name, 1, ev.cost ?? 0);
+        this.extra += ev.cost ?? 0;
+      }
+      fn?.(ev);
+    };
+  }
+  private bump(name: string, count: number, cost: number): void {
+    const t = this.tools.get(name) ?? { count: 0, cost: 0 };
+    t.count += count;
+    t.cost += cost;
+    this.tools.set(name, t);
+  }
+  usage(): Usage {
+    const out: Usage = { ...this.u, total_cost: this.u.total_cost + this.extra };
+    if (this.tools.size) out.tool_costs = [...this.tools.entries()].map(([name, t]) => ({ name, count: t.count, cost: t.cost }));
+    return out;
   }
 }
 

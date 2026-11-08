@@ -346,9 +346,11 @@ export class Transport {
     let code: string | undefined;
     let retryAfter: number | undefined;
     try {
-      const parsed = JSON.parse(text) as { type?: string; message?: string; code?: unknown; retry_after?: unknown };
+      const parsed = JSON.parse(text) as { type?: string; message?: string; error?: unknown; code?: unknown; retry_after?: unknown };
       if (parsed.type) type = parsed.type;
       if (parsed.message) message = parsed.message;
+      // The gateway's usual shape: {"error": "<message>"}.
+      else if (typeof parsed.error === "string" && parsed.error) message = parsed.error;
       if (typeof parsed.code === "string") code = parsed.code;
       if (typeof parsed.retry_after === "number") retryAfter = parsed.retry_after;
     } catch {

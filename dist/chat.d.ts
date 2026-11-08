@@ -1,6 +1,7 @@
 import type { Transport } from "./transport.js";
 import type { Usage } from "./types.js";
 import type { SDKEvents } from "./events.js";
+import type { ToolsService, PlatformToolsOption, PlatformToolCallEvent } from "./tools.js";
 /**
  * A single message in a chat conversation. Content is a string for plain
  * text, or an array of `ContentPart` for multi-modal messages.
@@ -165,6 +166,20 @@ export interface ChatCompletionParams {
      */
     max_server_iterations?: number;
     /**
+     * Platform tools run in your page (`true`: all of them, or names such
+     * as `["web_search", "web_fetch"]`): their descriptions (`GET /v1/tools`,
+     * cached) are added to `tools`, and whatever the model calls of them is
+     * run (`client.tools.runCalls`) and fed back, round after round, until
+     * it answers or calls one of your own tools. You see each call in
+     * `onToolCall`; the completion's `transcript` holds every message the
+     * rounds added. Not sent to the gateway.
+     */
+    platformTools?: PlatformToolsOption;
+    /** Each platform tool call as it starts and ends (with `platformTools`). */
+    onToolCall?: (ev: PlatformToolCallEvent) => void;
+    /** Most rounds of platform tool calls before the model must answer (default 8). */
+    maxToolRounds?: number;
+    /**
      * One of the app's private prompts, kept out of the browser: the
      * gateway reads `bundle.json (or .private/prompts/)<id>.md` from the app's bundle, fills
      * `{{var}}` placeholders from `vars`, and prepends it as the system
@@ -228,6 +243,15 @@ export interface ChatCompletion {
     model: string;
     choices: ChatChoice[];
     usage: Usage;
+    /**
+     * With `platformTools`: every message the call added to the
+     * conversation — each round's assistant reply with its tool calls and
+     * the platform tools' results, ending with the last reply. Append these
+     * to your history rather than the last message alone. When the last
+     * reply also calls your own tools, its platform calls are already
+     * answered here; answer yours after them.
+     */
+    transcript?: ChatMessage[];
 }
 export interface ChatChunkDelta {
     role?: string;
@@ -249,6 +273,8 @@ export interface ChatCompletionChunk {
     model: string;
     choices: ChatChunkChoice[];
     usage?: Usage;
+    /** With `platformTools`, on the last chunk: see `ChatCompletion.transcript`. */
+    transcript?: ChatMessage[];
 }
 export declare const userMessage: (content: string) => ChatMessage;
 export declare const systemMessage: (content: string) => ChatMessage;
@@ -274,15 +300,18 @@ export declare const audioPart: (url: string) => ContentPart;
 export declare class ChatService {
     private readonly transport;
     private readonly events;
-    constructor(transport: Transport, events: SDKEvents);
+    private readonly tools?;
+    constructor(transport: Transport, events: SDKEvents, tools?: ToolsService | undefined);
     /**
      * Create a chat completion (non-streaming).
      *
      * Streaming is forced off — pass `stream()` instead for incremental output.
+     * With `platformTools`, the platform tool rounds run first (see there).
      */
     create(params: ChatCompletionParams, init?: {
         signal?: AbortSignal;
     }): Promise<ChatCompletion>;
+    private createOnce;
     /**
      * Create a streaming chat completion. Returns an async iterator over
      * `ChatCompletionChunk`. The final chunk carries `usage` (token / cost
@@ -302,6 +331,13 @@ export declare class ChatService {
     stream(params: ChatCompletionParams, init?: {
         signal?: AbortSignal;
     }): AsyncGenerator<ChatCompletionChunk, void, unknown>;
+    private streamOnce;
+    /** The tools offered and the loop's settings, for `platformTools`. */
+    private toolSetup;
+    /** One round's request: the platform tools beside the caller's, none called on the last round. */
+    private roundParams;
+    private createWithTools;
+    private streamWithTools;
     /**
      * A completion whose answer is a JSON value matching `schema`: asks for
      * it with `response_format: json_schema` and parses the reply, also

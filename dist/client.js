@@ -11,6 +11,7 @@ import { AssetsService } from "./assets.js";
 import { AppsService } from "./apps.js";
 import { BrowserAuth } from "./browser-auth.js";
 import { SharedService } from "./shared.js";
+import { ToolsService, WebService } from "./tools.js";
 import { FilesRemote, SyncEngine } from "./sync/index.js";
 import { SDKEvents } from "./events.js";
 // The platform, not the bare gateway: personal rk_ keys are checked and
@@ -58,6 +59,10 @@ export class RunApps {
     /** This app's public folder, and other apps': files the creator publishes
      *  outside the bundle, readable with no token. */
     shared;
+    /** The platform's tools (web search, reading pages): `list`, `call`, and `chat.create({ platformTools })`. */
+    tools;
+    /** Search and read the web from code. */
+    web;
     transport;
     /** The `project` option, when given (read by @runappsai/agent to scope workspaces). */
     projectName;
@@ -152,7 +157,9 @@ export class RunApps {
         // intentionally don't take it — they're infrastructure, not
         // user-facing LLM calls, and surfacing them would clutter the
         // badge with /v1/models polls.
-        this.chat = new ChatService(transport, this.events);
+        this.tools = new ToolsService(transport, this.events);
+        this.web = new WebService(this.tools);
+        this.chat = new ChatService(transport, this.events, this.tools);
         this.models = new ModelsService(transport);
         this.image = new ImageService(transport, this.events);
         this.audio = new AudioService(transport, this.events);

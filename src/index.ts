@@ -208,6 +208,19 @@ export type {
   EmbeddingsResponse,
 } from "./embeddings.js";
 
+// Platform tools: client.tools, client.web, chat.create({ platformTools }).
+export { ToolsService, WebService } from "./tools.js";
+export type {
+  PlatformTool,
+  PlatformToolName,
+  PlatformToolResult,
+  PlatformToolCallEvent,
+  PlatformToolsOption,
+  WebSearchResult,
+  WebSearchData,
+  WebPage,
+} from "./tools.js";
+
 // Server-tool names for chat.create({ server_tools }), with autocomplete.
 export { ServerTools, type ServerToolName } from "./chat.js";
 

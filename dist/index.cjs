@@ -36,6 +36,8 @@ __export(src_exports, {
   ServerTools: () => ServerTools,
   SharedService: () => SharedService,
   SyncEngine: () => SyncEngine,
+  ToolsService: () => ToolsService,
+  WebService: () => WebService,
   acceptsField: () => acceptsField,
   acceptsModality: () => acceptsModality,
   allowedValuesFor: () => allowedValuesFor,
@@ -341,6 +343,7 @@ var Transport = class {
       const parsed = JSON.parse(text);
       if (parsed.type) type = parsed.type;
       if (parsed.message) message = parsed.message;
+      else if (typeof parsed.error === "string" && parsed.error) message = parsed.error;
       if (typeof parsed.code === "string") code = parsed.code;
       if (typeof parsed.retry_after === "number") retryAfter = parsed.retry_after;
     } catch {
@@ -544,16 +547,22 @@ var audioPart = (url) => ({
   audio_url: { url }
 });
 var ChatService = class {
-  constructor(transport, events) {
+  constructor(transport, events, tools) {
     __publicField(this, "transport", transport);
     __publicField(this, "events", events);
+    __publicField(this, "tools", tools);
   }
   /**
    * Create a chat completion (non-streaming).
    *
    * Streaming is forced off — pass `stream()` instead for incremental output.
+   * With `platformTools`, the platform tool rounds run first (see there).
    */
   async create(params, init) {
+    if (params.platformTools) return this.createWithTools(params, init);
+    return this.createOnce(stripLoopOptions(params), init);
+  }
+  async createOnce(params, init) {
     const body = { ...params, stream: false };
     return wrapEvents(
       this.events,
@@ -588,6 +597,13 @@ var ChatService = class {
    * that carried text — drives the badge's tokens/sec rate display.
    */
   async *stream(params, init) {
+    if (params.platformTools) {
+      yield* this.streamWithTools(params, init);
+      return;
+    }
+    yield* this.streamOnce(stripLoopOptions(params), init);
+  }
+  async *streamOnce(params, init) {
     const body = {
       ...params,
       stream: true,
@@ -617,6 +633,111 @@ var ChatService = class {
       })
     );
   }
+  /** The tools offered and the loop's settings, for `platformTools`. */
+  async toolSetup(params, signal) {
+    if (!this.tools) throw new Error("runapps: platformTools needs a client with tools");
+    const own = new Set((params.tools ?? []).map((t) => t.function.name));
+    const offered = (await this.tools.definitions(params.platformTools ?? true, signal ? { signal } : {})).filter((d) => !own.has(d.function.name));
+    return {
+      offered,
+      names: new Set(offered.map((d) => d.function.name)),
+      rounds: Math.max(0, params.maxToolRounds ?? DEFAULT_TOOL_ROUNDS),
+      base: stripLoopOptions(params)
+    };
+  }
+  /** One round's request: the platform tools beside the caller's, none called on the last round. */
+  roundParams(base, offered, messages, last) {
+    const p = { ...base, messages, tools: [...base.tools ?? [], ...offered] };
+    if (!p.tools.length) delete p.tools;
+    if (last && p.tools) p.tool_choice = "none";
+    return p;
+  }
+  async createWithTools(params, init) {
+    const { offered, names, rounds, base } = await this.toolSetup(params, init?.signal);
+    const messages = [...base.messages];
+    const transcript = [];
+    const total = new UsageSum();
+    for (let round = 0; ; round++) {
+      const completion = await this.createOnce(this.roundParams(base, offered, messages, round >= rounds), init);
+      total.add(completion.usage);
+      const msg = completion.choices[0]?.message;
+      const reply = msg ? assistantTurn(msg) : null;
+      if (reply) transcript.push(reply);
+      const calls = msg?.tool_calls ?? [];
+      const platform = calls.filter((c) => names.has(c.function.name));
+      if (!platform.length || round >= rounds) {
+        return { ...completion, usage: total.usage(), transcript };
+      }
+      messages.push(reply);
+      const results = await this.tools.runCalls(platform, { onToolCall: total.counting(params.onToolCall), signal: init?.signal });
+      messages.push(...results);
+      transcript.push(...results);
+      if (platform.length < calls.length) return { ...completion, usage: total.usage(), transcript };
+    }
+  }
+  async *streamWithTools(params, init) {
+    const { offered, names, rounds, base } = await this.toolSetup(params, init?.signal);
+    const messages = [...base.messages];
+    const transcript = [];
+    const total = new UsageSum();
+    let last;
+    for (let round = 0; ; round++) {
+      let content = "";
+      let reasoning = "";
+      const calls = /* @__PURE__ */ new Map();
+      for await (const chunk of this.streamOnce(this.roundParams(base, offered, messages, round >= rounds), init)) {
+        last = chunk;
+        if (chunk.usage) total.add(chunk.usage);
+        const choice = chunk.choices?.[0];
+        if (!choice) continue;
+        const d = choice.delta ?? {};
+        content += d.content ?? "";
+        reasoning += d.reasoning_content ?? d.reasoning ?? "";
+        let ownDeltas = d.tool_calls;
+        if (d.tool_calls?.length) {
+          ownDeltas = [];
+          for (const tc of d.tool_calls) {
+            const i = tc.index ?? 0;
+            const acc = calls.get(i) ?? { id: "", name: "", args: "" };
+            if (tc.id) acc.id = tc.id;
+            if (tc.function?.name) acc.name += tc.function.name;
+            if (tc.function?.arguments) acc.args += tc.function.arguments;
+            calls.set(i, acc);
+            if (!names.has(acc.name)) ownDeltas.push(tc);
+          }
+        }
+        const platformOnly = [...calls.values()].every((c) => names.has(c.name));
+        const finish = choice.finish_reason;
+        const hideFinish = !!finish && calls.size > 0 && platformOnly && round < rounds;
+        if (!d.content && !d.reasoning_content && !d.reasoning && !ownDeltas?.length && !(finish && !hideFinish) && !d.role) continue;
+        const delta = { ...d };
+        if (ownDeltas?.length) delta.tool_calls = ownDeltas;
+        else delete delta.tool_calls;
+        yield { ...chunk, usage: void 0, choices: [{ ...choice, delta, finish_reason: hideFinish ? null : finish }] };
+      }
+      const all = [...calls.entries()].sort((a, b) => a[0] - b[0]).map(([, c]) => ({ id: c.id, type: "function", function: { name: c.name, arguments: c.args } }));
+      const reply = { role: "assistant", content: content || null };
+      if (all.length) reply.tool_calls = all;
+      if (reasoning) reply.reasoning_content = reasoning;
+      transcript.push(reply);
+      const platform = all.filter((c) => names.has(c.function.name));
+      if (!platform.length || round >= rounds) break;
+      messages.push(reply);
+      const results = await this.tools.runCalls(platform, { onToolCall: total.counting(params.onToolCall), signal: init?.signal });
+      messages.push(...results);
+      transcript.push(...results);
+      if (platform.length < all.length) break;
+    }
+    yield {
+      id: last?.id ?? "",
+      object: "chat.completion.chunk",
+      created: last?.created ?? Math.floor(Date.now() / 1e3),
+      model: last?.model ?? params.model ?? "",
+      choices: [],
+      usage: total.usage(),
+      transcript
+    };
+  }
   /**
    * A completion whose answer is a JSON value matching `schema`: asks for
    * it with `response_format: json_schema` and parses the reply, also
@@ -641,6 +762,55 @@ var ChatService = class {
       throw new Error(`runapps: the model's reply is not JSON: ${String(text).slice(0, 200)}`);
     }
     return { value, completion };
+  }
+};
+var DEFAULT_TOOL_ROUNDS = 8;
+function stripLoopOptions(params) {
+  const { platformTools: _p, onToolCall: _o, maxToolRounds: _m, ...rest } = params;
+  return rest;
+}
+function assistantTurn(msg) {
+  const out = { role: "assistant", content: msg.content ?? null };
+  if (msg.tool_calls?.length) out.tool_calls = msg.tool_calls.map((c) => ({ id: c.id, type: "function", function: { name: c.function.name, arguments: c.function.arguments ?? "" } }));
+  const reasoning = msg.reasoning_content ?? msg.reasoning;
+  if (reasoning) out.reasoning_content = reasoning;
+  return out;
+}
+var UsageSum = class {
+  constructor() {
+    __publicField(this, "u", { total_cost: 0 });
+    __publicField(this, "tools", /* @__PURE__ */ new Map());
+    /** The platform tools' cost, which no round's `total_cost` includes. */
+    __publicField(this, "extra", 0);
+  }
+  add(u) {
+    if (!u) return;
+    this.u.total_cost += u.total_cost ?? 0;
+    for (const k of ["prompt_tokens", "completion_tokens", "total_tokens"]) {
+      if (typeof u[k] === "number") this.u[k] = (this.u[k] ?? 0) + u[k];
+    }
+    for (const t of u.tool_costs ?? []) this.bump(t.name, t.count, t.cost);
+  }
+  /** Wraps onToolCall so each finished call's cost is counted. */
+  counting(fn) {
+    return (ev) => {
+      if (ev.status === "done") {
+        this.bump(ev.name, 1, ev.cost ?? 0);
+        this.extra += ev.cost ?? 0;
+      }
+      fn?.(ev);
+    };
+  }
+  bump(name, count, cost) {
+    const t = this.tools.get(name) ?? { count: 0, cost: 0 };
+    t.count += count;
+    t.cost += cost;
+    this.tools.set(name, t);
+  }
+  usage() {
+    const out = { ...this.u, total_cost: this.u.total_cost + this.extra };
+    if (this.tools.size) out.tool_costs = [...this.tools.entries()].map(([name, t]) => ({ name, count: t.count, cost: t.cost }));
+    return out;
   }
 };
 function parseJSONLoose(text) {
@@ -4637,6 +4807,134 @@ var SharedService = class _SharedService {
   }
 };
 
+// src/tools.ts
+var MEMORY_TTL_MS = 10 * 6e4;
+var STORED_TTL_MS = 60 * 6e4;
+var memo = /* @__PURE__ */ new Map();
+function storageKey2(baseURL) {
+  return `runapps_tools:${baseURL}`;
+}
+function readStored(baseURL) {
+  try {
+    const raw = globalThis.localStorage?.getItem(storageKey2(baseURL));
+    if (!raw) return void 0;
+    const v = JSON.parse(raw);
+    if (Date.now() - v.at > STORED_TTL_MS || !Array.isArray(v.tools)) return void 0;
+    return v.tools;
+  } catch {
+    return void 0;
+  }
+}
+function writeStored(baseURL, tools) {
+  try {
+    globalThis.localStorage?.setItem(storageKey2(baseURL), JSON.stringify({ at: Date.now(), tools }));
+  } catch {
+  }
+}
+var ToolsService = class {
+  constructor(transport, events) {
+    __publicField(this, "transport", transport);
+    __publicField(this, "events", events);
+  }
+  /**
+   * The tools the platform runs now (cached: 10 minutes in memory, an
+   * hour in localStorage; `refresh: true` asks again). Needs no sign-in.
+   */
+  async list(opts = {}) {
+    const key = this.transport.baseURL;
+    const hit = memo.get(key);
+    if (!opts.refresh) {
+      if (hit?.tools && Date.now() - hit.at < MEMORY_TTL_MS) return hit.tools;
+      if (hit?.pending) return hit.pending;
+      const stored = readStored(key);
+      if (stored) {
+        memo.set(key, { at: Date.now(), tools: stored });
+        return stored;
+      }
+    }
+    const pending = this.transport.getPublicJSON("/v1/tools", opts.signal ? { signal: opts.signal } : void 0).then((r) => {
+      const tools = Array.isArray(r.data) ? r.data : [];
+      memo.set(key, { at: Date.now(), tools });
+      writeStored(key, tools);
+      return tools;
+    }).catch((err) => {
+      memo.delete(key);
+      throw err;
+    });
+    memo.set(key, { at: Date.now(), pending, ...hit?.tools ? { tools: hit.tools } : {} });
+    return pending;
+  }
+  /** The tools as chat `tools` entries; `which` picks them (default all). Names the platform does not offer are left out. */
+  async definitions(which = true, opts = {}) {
+    const tools = await this.list(opts);
+    const want = which === true ? null : new Set(which);
+    return tools.filter((t) => !want || want.has(t.name)).map((t) => ({ type: "function", function: { name: t.name, description: t.description, parameters: t.parameters } }));
+  }
+  /** Runs one tool. Throws an `APIError` when it fails (not charged) or the balance is short (402). */
+  async call(name, args = {}, init) {
+    const run = () => this.transport.postJSON(`/v1/tools/${encodeURIComponent(name)}`, args, init);
+    if (!this.events) return run();
+    return wrapEvents(this.events, { model: name, capability: "tool" }, run, (r) => ({ model: name, costUSD: r.usage?.total_cost }));
+  }
+  /**
+   * Answers a model's calls of platform tools, in order: one tool message
+   * per call (an error becomes `[error] …` for the model to read, as a
+   * failed call costs nothing). `onToolCall` sees each start and end.
+   */
+  async runCalls(calls, opts = {}) {
+    const out = [];
+    for (const tc of calls) {
+      const id = tc.id ?? "";
+      const name = tc.function.name;
+      let args = {};
+      try {
+        const parsed = tc.function.arguments ? JSON.parse(tc.function.arguments) : {};
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) args = parsed;
+      } catch {
+      }
+      safely(opts.onToolCall, { id, name, args, status: "running" });
+      try {
+        const r = await this.call(name, args, opts.signal ? { signal: opts.signal } : void 0);
+        out.push({ role: "tool", tool_call_id: id, content: r.content });
+        safely(opts.onToolCall, { id, name, args, status: "done", content: r.content, data: r.data, cost: r.usage?.total_cost });
+      } catch (err) {
+        if (opts.signal?.aborted) throw err;
+        const content = `[error] ${(err instanceof Error ? err.message : String(err)).replace(/^runapps: \d+ [\w-]+: /, "")}`;
+        out.push({ role: "tool", tool_call_id: id, content });
+        safely(opts.onToolCall, { id, name, args, status: "error", content });
+      }
+    }
+    return out;
+  }
+};
+function safely(fn, ev) {
+  if (!fn) return;
+  try {
+    fn(ev);
+  } catch (err) {
+    console.warn("runapps: onToolCall threw", err);
+  }
+}
+var WebService = class {
+  constructor(tools) {
+    __publicField(this, "tools", tools);
+  }
+  /** Searches the web (charged per call). */
+  async search(query, opts = {}) {
+    const { signal, ...rest } = opts;
+    const r = await this.tools.call("web_search", { query, ...rest }, signal ? { signal } : void 0);
+    return r.data?.results ?? [];
+  }
+  /** Reads a page: its main content as text (`format: "html"` for the HTML as it is). */
+  async fetch(url, opts = {}) {
+    const args = { url };
+    if (opts.format) args.format = opts.format;
+    if (opts.maxChars) args.max_chars = opts.maxChars;
+    const r = await this.tools.call("web_fetch", args, opts.signal ? { signal: opts.signal } : void 0);
+    return r.data;
+  }
+};
+
 // src/sync/hook.ts
 var txState = /* @__PURE__ */ new WeakMap();
 var observedDbs = /* @__PURE__ */ new WeakMap();
@@ -5942,6 +6240,10 @@ var RunApps = class {
     /** This app's public folder, and other apps': files the creator publishes
      *  outside the bundle, readable with no token. */
     __publicField(this, "shared");
+    /** The platform's tools (web search, reading pages): `list`, `call`, and `chat.create({ platformTools })`. */
+    __publicField(this, "tools");
+    /** Search and read the web from code. */
+    __publicField(this, "web");
     __publicField(this, "transport");
     /** The `project` option, when given (read by @runappsai/agent to scope workspaces). */
     __publicField(this, "projectName");
@@ -6007,7 +6309,9 @@ var RunApps = class {
       ...onUnauthorized !== void 0 && { onUnauthorized },
       ...options.fetch ? { fetchImpl: options.fetch } : {}
     });
-    this.chat = new ChatService(transport, this.events);
+    this.tools = new ToolsService(transport, this.events);
+    this.web = new WebService(this.tools);
+    this.chat = new ChatService(transport, this.events, this.tools);
     this.models = new ModelsService(transport);
     this.image = new ImageService(transport, this.events);
     this.audio = new AudioService(transport, this.events);

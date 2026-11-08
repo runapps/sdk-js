@@ -35,6 +35,8 @@ export { AssetsService } from "./assets.js";
 export { encodeImageUrl, decodeMediaUrl } from "./media.js";
 export type { FileObject, FileListResult, PutOptions as FilePutOptions, SignOptions as FileSignOptions, ListOptions as FileListOptions, PutFromURLOptions as FilePutFromURLOptions, BatchOp as FileBatchOp, BatchResult as FileBatchResult, } from "./files.js";
 export type { EmbeddingsParams, Embedding, EmbeddingsUsage, EmbeddingsResponse, } from "./embeddings.js";
+export { ToolsService, WebService } from "./tools.js";
+export type { PlatformTool, PlatformToolName, PlatformToolResult, PlatformToolCallEvent, PlatformToolsOption, WebSearchResult, WebSearchData, WebPage, } from "./tools.js";
 export { ServerTools, type ServerToolName } from "./chat.js";
 export { parseJSONLoose } from "./chat.js";
 //# sourceMappingURL=index.d.ts.map

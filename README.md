@@ -251,29 +251,39 @@ const res = await client.chat.create({
 const contact = JSON.parse(res.choices[0].message.content ?? "{}");
 ```
 
-### Server tools
+### Web search and reading pages
 
-The platform can search and read the web for the model, looping until it answers. Your code only sees the final reply.
+The platform runs a few tools of its own: `web_search` (Brave), `web_fetch` (reads a page: its title and main content as text, links kept; JSON and plain text as they are) and `twitter_search`. Call them from code:
 
 ```ts
-import { ServerTools } from "@runappsai/sdk";
-
-const resp = await client.chat.create({
-  model: "Claude Sonnet 4.6",
-  messages: [{ role: "user", content: "What is the latest stable Go version?" }],
-  server_tools: [ServerTools.WebSearch, ServerTools.WebFetch],
-  max_server_iterations: 5,                 // default 5, at most 10
-});
-for (const t of resp.usage.tool_costs ?? []) console.log(t.name, t.count, t.cost);
+const results = await client.web.search("Go 1.27 release notes", { count: 5, freshness: "month" });
+const page = await client.web.fetch(results[0].url);        // { url, title, text, published, truncated, … }
+const r = await client.tools.call("web_search", { query: "…" }); // { content, data, usage }
 ```
 
-| Tool | What it does | Price |
-|---|---|---|
-| `web_search` | Searches the web | Per call |
-| `web_fetch` | Reads a page as text | Free |
-| `twitter_search` | Searches posts on X | Per call |
+Or let the model use them: `platformTools` adds their descriptions to the request (fetched from the platform and cached, so new tools need no SDK update) and runs whatever the model calls, in your page, round after round, until it answers:
 
-The tokens of every round and each tool call are billed together, and `usage.total_cost` includes both. Server tools combine with your own `tools`; if the model calls one of yours, the loop stops and the call is returned to you. With `stream: true` the tool rounds run silently and the final answer streams.
+```ts
+const resp = await client.chat.create({
+  messages: [{ role: "user", content: "What is the newest Go release?" }],
+  tools: myTools,                                   // your own tools still work
+  platformTools: ["web_search", "web_fetch"],       // or true for all
+  onToolCall: (e) => setStatus(`${e.name}: ${e.status}`),   // running / done / error, with cost
+});
+history.push(...resp.transcript);                   // every round: replies and tool results
+```
+
+`chat.stream` takes the same options: each round's text streams as it comes, the platform's tool calls stay out of the chunks, and the last chunk carries `usage` and `transcript`. When the model calls one of your own tools the loop stops and returns it as usual (any platform calls beside it are already answered in `transcript`). `maxToolRounds` (default 8) bounds the rounds; on the last one the model must answer. `usage.total_cost` includes the tools, `usage.tool_costs` lists them.
+
+| Tool | Does | Price |
+|---|---|---|
+| `web_search` | Searches the web: title, URL, age and snippet per result | $0.005 per call |
+| `web_fetch` | Reads a page as text | $0.0005 per call |
+| `twitter_search` | Searches posts on X | $0.003 per call |
+
+A call that fails is not charged; the app's creator fee applies as on model calls. `client.tools.list()` has the current list and prices. In an agent built with [`@runappsai/agent`](https://github.com/runapps/agent) they are the `webTools` option and a globe in its chat's toolbar.
+
+The older `server_tools: ["web_search", …]` field still works: the gateway then runs the loop itself and you get only the final answer.
 
 ## Agents
 
@@ -614,6 +624,8 @@ Base URL `https://www.runapps.ai`. Send `Authorization: Bearer <key or app token
 | `GET /v1/videos/generations/<id>` | Job status |
 | `GET /v1/videos/<id>/content` | The finished video |
 | `POST /v1/embeddings` | Embeddings |
+| `GET /v1/tools` | The platform's tools, their JSON Schema and price (no key needed) |
+| `POST /v1/tools/<name>` | Run one: the body is its arguments; answers `{content, data, usage}` |
 | `/v1/async/…` | Async versions of the image and audio calls: submit, then poll |
 
 ### Files over HTTP
@@ -679,6 +691,8 @@ Every call takes `{ signal }` for cancellation.
 | `client.realtime` | `connect` → session: `on`, `send`, `appendAudio`, `commitAudio`, `mute`, `unmute`, `say`, `cancelResponse`, `update`, `sendFunctionResult`, `close`, `closed` |
 | `client.video` | `generate`, `getStatus`, `wait`, `getContent` |
 | `client.embeddings` | `create` |
+| `client.tools` | `list`, `definitions`, `call`, `runCalls` |
+| `client.web` | `search`, `fetch` |
 | `client.shared` | `list`, `get`, `text`, `json`, `url`, `copy`, `canPublish`, `put`, `remove`, `of` |
 | `client.apps` | `receivers`, `send`, `onReceive` (→ `importTo`, `blob`, `fromApp`; option `confirm`), `waiting`, `dismiss`, `sendButton`, `offer`, `watchDownloads` |
 
