@@ -1,19 +1,38 @@
-// sync/log.ts — the SDK's own IndexedDB database.
+// sync/log.ts — the SDK's own IndexedDB databases.
 //
-// Holds what the sync engine needs to survive a reload:
-//   ops  — local changes not yet pushed, in commit order. Values are kept
-//          as the app wrote them (structured clone, Blobs included);
-//          they are encoded only when pushed, so logging works offline.
-//   meta — small key/value state: the owner (user id the local data
-//          belongs to), shard ETags seen last, store clear marks.
+// `__runapps_sync__` (version 1, the same since the first SDK with sync:
+// an SDK still open in another tab keeps working with it):
+//   ops     — local changes not yet pushed, in commit order. Values are
+//             kept as the app wrote them (structured clone, Blobs
+//             included); they are encoded only when pushed, so logging
+//             works offline. Each op names the user it was written for.
+//   meta    — small key/value state: the owner (user id the local data
+//             belongs to), schemas, journals seen, the clock offset. The
+//             `etag:` entries are written by SDKs before 0.20 (whole
+//             shards applied) and only read now.
+//
+// `__runapps_sync_state__` (0.20):
+//   applied — per record, the cloud version this device holds locally
+//             (its write time and the shard it came from). A shard is
+//             applied record by record against it, so a record is written
+//             locally only when the cloud has something newer, and a
+//             record the cloud no longer has is recognised as deleted.
+//   marks   — shard ETags applied that way.
+//   dead    — ops that can never be pushed (a value the codec refuses),
+//             kept for inspection instead of blocking every later push.
+//   info    — whose data `applied` describes.
 //
 // Opened through the untouched `indexedDB.open`, never the hooked one,
-// and its name starts with `__runapps` so the hook leaves it alone.
+// and their names start with `__runapps` so the hook leaves them alone.
 
 export const SYNC_DB_NAME = "__runapps_sync__";
 const SYNC_DB_VERSION = 1;
+export const SYNC_STATE_DB_NAME = "__runapps_sync_state__";
+const SYNC_STATE_DB_VERSION = 1;
 
-export type OpKind = "put" | "del" | "clear";
+/** put / del / clear act on one store; dbclear on every store of the
+ *  database (the app deleted it). */
+export type OpKind = "put" | "del" | "clear" | "dbclear";
 
 export interface LoggedOp {
   id?: number;
@@ -24,7 +43,7 @@ export interface LoggedOp {
   kid: string;
   /** Encoded key (codec.encodeKey); undefined for clear. */
   key?: unknown;
-  /** The value as written, for put. */
+  /** The value as written, for put; the store names, for dbclear. */
   value?: unknown;
   /** For a put of a plain object whose previous value was seen: the
    *  fields this write changed (added, modified or removed). Undefined
@@ -32,6 +51,24 @@ export interface LoggedOp {
   changed?: string[];
   /** Hybrid logical clock timestamp (ms, monotonic per device). */
   ts: number;
+  /** The user the write was made for; null when nobody was signed in.
+   *  Absent on ops logged before SDK 0.20: they belong to the owner. */
+  owner?: string | null;
+  /** Written before this device had pulled the database even once: the
+   *  cloud's own copy of a record wins over it (an app's defaults must
+   *  not overwrite the user's data). */
+  weak?: boolean;
+}
+
+/** The cloud version of one record this device holds. */
+export interface AppliedEntry {
+  /** Write time of the record. */
+  t: number;
+  /** Shard it lives in. */
+  s: number;
+  /** Hash of the record as applied: a field merge can change a record
+   *  without raising its time. */
+  h?: number;
 }
 
 function req<T>(r: IDBRequest<T>): Promise<T> {
@@ -50,39 +87,65 @@ function done(tx: IDBTransaction): Promise<void> {
 }
 
 export class SyncLog {
-  private dbPromise: Promise<IDBDatabase> | null = null;
+  private mainPromise: Promise<IDBDatabase> | null = null;
+  private statePromise: Promise<IDBDatabase> | null = null;
 
   constructor(private readonly open: (name: string, version?: number) => IDBOpenDBRequest) {}
 
+  private openDb(name: string, version: number, upgrade: (db: IDBDatabase) => void, reset: () => void): Promise<IDBDatabase> {
+    const p = new Promise<IDBDatabase>((resolve, reject) => {
+      const r = this.open(name, version);
+      r.onupgradeneeded = () => upgrade(r.result);
+      r.onsuccess = () => {
+        const db = r.result;
+        // Another tab upgrading (a future SDK) must not be blocked by us.
+        db.onversionchange = () => {
+          db.close();
+          reset();
+        };
+        resolve(db);
+      };
+      r.onerror = () => reject(r.error ?? new Error(`cannot open ${name}`));
+      r.onblocked = () => reject(new Error(`${name} open blocked`));
+    });
+    p.catch(() => reset());
+    return p;
+  }
+
   private db(): Promise<IDBDatabase> {
-    if (!this.dbPromise) {
-      this.dbPromise = new Promise((resolve, reject) => {
-        const r = this.open(SYNC_DB_NAME, SYNC_DB_VERSION);
-        r.onupgradeneeded = () => {
-          const db = r.result;
+    if (!this.mainPromise) {
+      this.mainPromise = this.openDb(
+        SYNC_DB_NAME,
+        SYNC_DB_VERSION,
+        (db) => {
           if (!db.objectStoreNames.contains("ops")) {
             const ops = db.createObjectStore("ops", { keyPath: "id", autoIncrement: true });
             ops.createIndex("store", ["db", "store"], { unique: false });
           }
           if (!db.objectStoreNames.contains("meta")) db.createObjectStore("meta");
-        };
-        r.onsuccess = () => {
-          const db = r.result;
-          // Another tab upgrading (a future SDK) must not be blocked by us.
-          db.onversionchange = () => {
-            db.close();
-            this.dbPromise = null;
-          };
-          resolve(db);
-        };
-        r.onerror = () => reject(r.error ?? new Error("cannot open sync log"));
-        r.onblocked = () => reject(new Error("sync log open blocked"));
-      });
-      this.dbPromise.catch(() => {
-        this.dbPromise = null;
-      });
+        },
+        () => (this.mainPromise = null),
+      );
     }
-    return this.dbPromise;
+    return this.mainPromise;
+  }
+
+  private state(): Promise<IDBDatabase> {
+    if (!this.statePromise) {
+      this.statePromise = this.openDb(
+        SYNC_STATE_DB_NAME,
+        SYNC_STATE_DB_VERSION,
+        (db) => {
+          // Keyed [db, store, kid].
+          if (!db.objectStoreNames.contains("applied")) db.createObjectStore("applied");
+          if (!db.objectStoreNames.contains("marks")) db.createObjectStore("marks");
+          if (!db.objectStoreNames.contains("dead")) db.createObjectStore("dead", { autoIncrement: true });
+          if (!db.objectStoreNames.contains("info")) db.createObjectStore("info");
+        },
+        () => (this.statePromise = null),
+      );
+    }
+    return this.statePromise;
   }
 
   async append(ops: LoggedOp[]): Promise<void> {
@@ -116,10 +179,130 @@ export class SyncLog {
     await done(tx);
   }
 
-  async clearOps(): Promise<void> {
+  /** Give every op whose owner is `from` (undefined: logged before owners
+   *  were recorded, or null: nobody signed in) to `to`. */
+  async reassignOwner(from: (o: string | null | undefined) => boolean, to: string): Promise<void> {
     const db = await this.db();
     const tx = db.transaction("ops", "readwrite");
-    tx.objectStore("ops").clear();
+    const cur = tx.objectStore("ops").openCursor();
+    cur.onsuccess = () => {
+      const c = cur.result;
+      if (!c) return;
+      const op = c.value as LoggedOp;
+      if (from(op.owner)) c.update({ ...op, owner: to });
+      c.continue();
+    };
+    await done(tx);
+  }
+
+  /** Move ops that can never be pushed out of the way. */
+  async bury(ops: { op: LoggedOp; error: string }[]): Promise<void> {
+    if (ops.length === 0) return;
+    const st = await this.state();
+    const tx = st.transaction("dead", "readwrite");
+    for (const { op, error } of ops) {
+      const { value: _v, ...rest } = op;
+      // The value itself may be what cannot be stored again: keep its
+      // description, not the value.
+      tx.objectStore("dead").add({ op: rest, error, at: Date.now() });
+    }
+    await done(tx);
+    await this.remove(ops.map((o) => o.op.id).filter((id): id is number => id !== undefined));
+  }
+
+  /** db\0store\0kid of every op set aside. */
+  async deadKeys(): Promise<Set<string>> {
+    const st = await this.state();
+    const tx = st.transaction("dead", "readonly");
+    const all = (await req(tx.objectStore("dead").getAll())) as { op: LoggedOp }[];
+    return new Set(all.map((d) => d.op.db + "\u0000" + d.op.store + "\u0000" + d.op.kid));
+  }
+
+  async deadCount(): Promise<number> {
+    const st = await this.state();
+    const tx = st.transaction("dead", "readonly");
+    return req(tx.objectStore("dead").count());
+  }
+
+  async appliedFor(dbName: string, store: string): Promise<Map<string, AppliedEntry>> {
+    const st = await this.state();
+    const tx = st.transaction("applied", "readonly");
+    const os = tx.objectStore("applied");
+    const range = IDBKeyRange.bound([dbName, store], [dbName, store, []]);
+    const keys = (await req(os.getAllKeys(range))) as [string, string, string][];
+    const vals = (await req(os.getAll(range))) as AppliedEntry[];
+    const out = new Map<string, AppliedEntry>();
+    keys.forEach((k, i) => out.set(k[2], vals[i]!));
+    return out;
+  }
+
+  /** Forget what this device holds of one store or a whole database,
+   *  and the shard ETags under `markPrefix`. */
+  async forgetApplied(dbName: string, store: string | undefined, markPrefix: string): Promise<void> {
+    const st = await this.state();
+    const tx = st.transaction(["applied", "marks"], "readwrite");
+    const range = store === undefined
+      ? IDBKeyRange.bound([dbName], [dbName, []])
+      : IDBKeyRange.bound([dbName, store], [dbName, store, []]);
+    tx.objectStore("applied").delete(range);
+    tx.objectStore("marks").delete(IDBKeyRange.bound(markPrefix, markPrefix + "\uffff"));
+    await done(tx);
+  }
+
+  /** Bookkeeping for one apply, in one transaction: what this device
+   *  now holds of each store, and the shard ETags applied (undefined:
+   *  forget). */
+  async commitApply(dbName: string, applied: Map<string, Map<string, AppliedEntry | undefined>>, marks: Map<string, string | undefined>): Promise<void> {
+    const st = await this.state();
+    const tx = st.transaction(["applied", "marks"], "readwrite");
+    const os = tx.objectStore("applied");
+    for (const [store, entries] of applied) {
+      for (const [kid, e] of entries) {
+        if (e === undefined) os.delete([dbName, store, kid]);
+        else os.put(e, [dbName, store, kid]);
+      }
+    }
+    const m = tx.objectStore("marks");
+    for (const [path, etag] of marks) {
+      if (etag === undefined) m.delete(path);
+      else m.put(etag, path);
+    }
+    await done(tx);
+  }
+
+  /** Every shard ETag applied record by record. */
+  async marks(): Promise<Map<string, string>> {
+    const st = await this.state();
+    const tx = st.transaction("marks", "readonly");
+    const os = tx.objectStore("marks");
+    const keys = (await req(os.getAllKeys())) as string[];
+    const vals = (await req(os.getAll())) as string[];
+    const out = new Map<string, string>();
+    keys.forEach((k, i) => out.set(k, vals[i]!));
+    return out;
+  }
+
+  /** The user `applied` describes. */
+  async stateOwner(): Promise<string | undefined> {
+    const st = await this.state();
+    const tx = st.transaction("info", "readonly");
+    return (await req(tx.objectStore("info").get("owner"))) as string | undefined;
+  }
+
+  /** Forget everything held (applied and marks) and record a new owner. */
+  async resetState(owner: string): Promise<void> {
+    const st = await this.state();
+    const tx = st.transaction(["applied", "marks", "info"], "readwrite");
+    tx.objectStore("applied").clear();
+    tx.objectStore("marks").clear();
+    tx.objectStore("info").put(owner, "owner");
+    await done(tx);
+  }
+
+  async setStateOwner(owner: string): Promise<void> {
+    const st = await this.state();
+    const tx = st.transaction("info", "readwrite");
+    tx.objectStore("info").put(owner, "owner");
     await done(tx);
   }
 
@@ -145,7 +328,7 @@ export class SyncLog {
     const db = await this.db();
     const tx = db.transaction("meta", "readonly");
     const st = tx.objectStore("meta");
-    const range = IDBKeyRange.bound(prefix, prefix + "￿");
+    const range = IDBKeyRange.bound(prefix, prefix + "\uffff");
     const keys = (await req(st.getAllKeys(range))) as string[];
     const vals = await req(st.getAll(range));
     const out = new Map<string, unknown>();
@@ -153,17 +336,30 @@ export class SyncLog {
     return out;
   }
 
-  async clearAll(): Promise<void> {
+  /** Delete every meta entry whose key starts with one of `prefixes`. */
+  async deleteMetaWithPrefix(...prefixes: string[]): Promise<void> {
     const db = await this.db();
-    const tx = db.transaction(["ops", "meta"], "readwrite");
-    tx.objectStore("ops").clear();
-    tx.objectStore("meta").clear();
+    const tx = db.transaction("meta", "readwrite");
+    const st = tx.objectStore("meta");
+    for (const p of prefixes) st.delete(IDBKeyRange.bound(p, p + "\uffff"));
     await done(tx);
   }
 
+  /** A new owner: every meta entry, and everything held. The ops (which
+   *  carry their owner) and the dead letters stay. */
+  async resetForOwner(owner: string): Promise<void> {
+    const db = await this.db();
+    const tx = db.transaction("meta", "readwrite");
+    tx.objectStore("meta").clear();
+    await done(tx);
+    await this.resetState(owner);
+  }
+
   close(): void {
-    this.dbPromise?.then((db) => db.close()).catch(() => {});
-    this.dbPromise = null;
+    this.mainPromise?.then((db) => db.close()).catch(() => {});
+    this.statePromise?.then((db) => db.close()).catch(() => {});
+    this.mainPromise = null;
+    this.statePromise = null;
   }
 }
 

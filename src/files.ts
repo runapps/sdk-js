@@ -256,13 +256,14 @@ export class FilesService {
     return this.run("files.read", () => this.readRaw(path, init));
   }
 
-  private async readRaw(path: string, init?: { signal?: AbortSignal; ifNoneMatch?: string }): Promise<FileRead> {
-    const { data, contentType, etag, notModified } = await this.transport.getRaw(pathToURL(await this.base(), path), init);
+  private async readRaw(path: string, init?: { signal?: AbortSignal; ifNoneMatch?: string }): Promise<FileRead & { notModified?: boolean; serverTime?: number }> {
+    const { data, contentType, etag, notModified, serverTime } = await this.transport.getRaw(pathToURL(await this.base(), path), init);
     return {
       blob: new Blob([new Uint8Array(data)], { type: contentType || "application/octet-stream" }),
       contentType,
       etag,
       ...(notModified ? { notModified: true } : {}),
+      ...(serverTime !== undefined ? { serverTime } : {}),
     };
   }
 
@@ -274,10 +275,10 @@ export class FilesService {
   async readJSON<T = unknown>(
     path: string,
     init?: { signal?: AbortSignal; ifNoneMatch?: string },
-  ): Promise<{ value: T | undefined; etag?: string; notModified?: boolean }> {
-    let r: FileRead & { notModified?: boolean };
+  ): Promise<{ value: T | undefined; etag?: string; notModified?: boolean; serverTime?: number }> {
+    let r: FileRead & { notModified?: boolean; serverTime?: number };
     try {
-      r = await this.read(path, init);
+      r = await this.run("files.read", () => this.readRaw(path, init));
     } catch (e) {
       if ((e as { statusCode?: number; status?: number })?.statusCode === 404 ||
           (e as { statusCode?: number; status?: number })?.status === 404) {
@@ -285,8 +286,9 @@ export class FilesService {
       }
       throw e;
     }
-    if (r.notModified) return { value: undefined, etag: r.etag, notModified: true };
-    return { value: JSON.parse(await r.blob.text()) as T, etag: r.etag };
+    const st = r.serverTime !== undefined ? { serverTime: r.serverTime } : {};
+    if (r.notModified) return { value: undefined, etag: r.etag, notModified: true, ...st };
+    return { value: JSON.parse(await r.blob.text()) as T, etag: r.etag, ...st };
   }
 
   /** Stat: HEAD-only object metadata. */

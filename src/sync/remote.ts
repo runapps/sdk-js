@@ -28,24 +28,26 @@ export class FilesRemote implements SyncRemote {
     try {
       r = await this.files.readJSON(path, ifNoneMatch ? { ifNoneMatch } : undefined);
     } catch (e) {
-      // A shard that is not JSON (a write cut short before the gateway
-      // checked lengths) would stall every pull.  Hand it back as an
-      // empty shard *with its ETag*, so the next push overwrites it with
-      // If-Match instead of trying to create it (409 → re-pull → 409 …).
+      // A file that is not JSON (a write cut short before the gateway
+      // checked lengths). Say so, with its ETag: the engine neither
+      // takes it for an empty shard (that would read as "every record
+      // in it was deleted") nor stalls on it, and the next write replaces
+      // it with If-Match.
       if (e instanceof SyntaxError) {
-        console.warn("[runapps sync] unreadable shard, will be rewritten", path);
+        console.warn("[runapps sync] unreadable file, will be rewritten", path);
         try {
           const st = await this.files.stat(path);
-          return { status: "ok" as const, value: null, etag: st.etag ?? "", serverTime: st.last_modified ? Date.parse(st.last_modified) : undefined };
+          return { status: "corrupt" as const, etag: st.etag ?? "" };
         } catch {
           return { status: "missing" as const };
         }
       }
       throw e;
     }
-    if (r.notModified) return { status: "unchanged" as const };
-    if (r.value === undefined) return { status: "missing" as const };
-    return { status: "ok" as const, value: r.value, etag: r.etag ?? "" };
+    const st = r.serverTime !== undefined ? { serverTime: r.serverTime } : {};
+    if (r.notModified) return { status: "unchanged" as const, ...st };
+    if (r.value === undefined) return { status: "missing" as const, ...st };
+    return { status: "ok" as const, value: r.value, etag: r.etag ?? "", ...st };
   }
 
   async putJSON(path: string, value: unknown, cond: { ifMatch?: string; ifNoneMatch?: boolean }, opts?: { keepalive?: boolean }) {
@@ -65,6 +67,14 @@ export class FilesRemote implements SyncRemote {
       const code = (e as APIError).statusCode;
       if (code === 412 || code === 409) return { status: "conflict" as const };
       throw e;
+    }
+  }
+
+  async remove(path: string): Promise<void> {
+    try {
+      await this.files.del(path);
+    } catch (e) {
+      if ((e as APIError).statusCode !== 404) throw e;
     }
   }
 

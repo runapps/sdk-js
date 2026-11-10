@@ -30,7 +30,7 @@
 // databases its `include` admits, on the factory it was bound to (tests
 // run one "device" per factory; a page has one factory).
 
-import { extractKey } from "./codec.js";
+import { extractKey, injectKey } from "./codec.js";
 
 export type CommittedOp =
   | { store: string; kind: "put"; key: IDBValidKey; value: unknown; prior?: unknown }
@@ -47,7 +47,8 @@ export interface HookOptions {
   /** The app opened an observed database. The open request's success is
    *  held until this resolves (or `openTimeoutMs` passes). */
   onOpen: (db: IDBDatabase, dbName: string) => Promise<void> | void;
-  /** The app deleted an observed database. */
+  /** The app deleted an observed database (called once the delete has
+   *  succeeded; a blocked or failed delete changes nothing). */
   onDeleteDatabase: (dbName: string) => void;
   openTimeoutMs: number;
   /** Only observe this factory's databases. Default: the global one at
@@ -58,6 +59,9 @@ export interface HookOptions {
 export interface InstalledHook {
   /** The factory's untouched open — for the SDK's own databases. */
   originalOpen: (name: string, version?: number) => IDBOpenDBRequest;
+  /** A connection the SDK opened for itself: never observed, even when
+   *  its database is one the app uses. */
+  markInternal(db: IDBDatabase): void;
   uninstall(): void;
 }
 
@@ -80,6 +84,13 @@ interface DbInfo {
 const txState = new WeakMap<IDBTransaction, TxState>();
 /** IDBDatabase handles the app obtained through the hooked open. */
 const observedDbs = new WeakMap<IDBDatabase, DbInfo>();
+/** The running upgrade transaction of a connection (deleteObjectStore
+ *  is only allowed inside one). */
+const upgradeTx = new WeakMap<IDBDatabase, IDBTransaction>();
+/** The SDK's own connections: never observed. */
+const internalDbs = new WeakSet<IDBDatabase>();
+/** Connections already looked at by `lazyObserve`. */
+const lazyChecked = new WeakSet<IDBDatabase>();
 const subscribers = new Set<Subscriber>();
 let originals: {
   open: IDBFactory["open"];
@@ -90,6 +101,7 @@ let originals: {
   get: IDBObjectStore["get"];
   delete: IDBObjectStore["delete"];
   clear: IDBObjectStore["clear"];
+  deleteObjectStore: IDBDatabase["deleteObjectStore"];
   getAllKeys: IDBObjectStore["getAllKeys"];
   cursorUpdate: IDBCursor["update"];
   cursorDelete: IDBCursor["delete"];
@@ -153,6 +165,12 @@ class HookedOpenRequest {
       this.result = real.result;
       this.transaction = real.transaction;
       observedDbs.set(real.result, { name, subs });
+      // Writes an upgrade makes (a migration rewriting records, a store
+      // deleted) are app writes like any other.
+      if (real.transaction) {
+        track(real.transaction, name, subs);
+        upgradeTx.set(real.result, real.transaction);
+      }
       this.dispatch(makeEvent("upgradeneeded", { oldVersion: e.oldVersion, newVersion: e.newVersion }, this));
     });
     real.addEventListener("blocked", (ev) => {
@@ -279,6 +297,59 @@ function subscribersFor(factory: IDBFactory, name: string): Subscriber[] {
   return out;
 }
 
+/** Collect a readwrite (or upgrade) transaction's writes and hand them
+ *  to the subscribers when it commits. */
+function track(tx: IDBTransaction, dbName: string, subs: Subscriber[]): void {
+  if (txState.has(tx)) return;
+  const st: TxState = { db: dbName, subs, ops: [] };
+  txState.set(tx, st);
+  tx.addEventListener("complete", () => {
+    if (st.ops.length === 0) return;
+    const ops = st.ops;
+    st.ops = [];
+    for (const s of st.subs) {
+      const mine = ops.filter((op) => !s.opts.excludeStore(st.db, op.store));
+      if (mine.length === 0) continue;
+      try {
+        s.opts.onCommit(st.db, mine);
+      } catch (err) {
+        reportListenerError(err);
+      }
+    }
+  });
+}
+
+/** A connection the app opened before the hook was installed (or by a
+ *  path that bypassed it): observe it from its first transaction on, as
+ *  if it had come through the hooked open. */
+function lazyObserve(db: IDBDatabase): DbInfo | undefined {
+  if (lazyChecked.has(db) || internalDbs.has(db)) return undefined;
+  lazyChecked.add(db);
+  if (typeof indexedDB === "undefined") return undefined;
+  const subs = subscribersFor(indexedDB, db.name);
+  if (subs.length === 0) return undefined;
+  const info = { name: db.name, subs };
+  observedDbs.set(db, info);
+  for (const s of subs) {
+    try {
+      void Promise.resolve(s.opts.onOpen(db, db.name)).catch(() => {});
+    } catch {
+      /* never block the app */
+    }
+  }
+  return info;
+}
+
+/** The snapshot of a value IndexedDB gave a generated key: the key goes
+ *  into the snapshot at the store's keyPath, as it went into the stored
+ *  record, or the other devices would store it under a key of their own. */
+function withGeneratedKey(store: IDBObjectStore, snapshot: unknown, key: IDBValidKey): unknown {
+  if (!store.autoIncrement || typeof store.keyPath !== "string" || store.keyPath === "") return snapshot;
+  if (extractKey(snapshot, store.keyPath) !== undefined) return snapshot;
+  injectKey(snapshot, store.keyPath, key);
+  return snapshot;
+}
+
 function patchPrototypes(): void {
   const F = IDBFactory.prototype;
   const D = IDBDatabase.prototype;
@@ -293,6 +364,7 @@ function patchPrototypes(): void {
     get: S.get,
     delete: S.delete,
     clear: S.clear,
+    deleteObjectStore: D.deleteObjectStore,
     getAllKeys: S.getAllKeys,
     cursorUpdate: C.update,
     cursorDelete: C.delete,
@@ -308,14 +380,32 @@ function patchPrototypes(): void {
   };
 
   F.deleteDatabase = function (this: IDBFactory, name: string): IDBOpenDBRequest {
-    for (const s of subscribersFor(this, name)) {
-      try {
-        s.opts.onDeleteDatabase(name);
-      } catch {
-        /* never block the app's delete */
-      }
+    const subs = subscribersFor(this, name);
+    const r = o.deleteDatabase.call(this, name);
+    if (subs.length > 0) {
+      // Only a delete that happened counts: a blocked one may never.
+      r.addEventListener("success", () => {
+        for (const s of subs) {
+          try {
+            s.opts.onDeleteDatabase(name);
+          } catch {
+            /* never block the app's delete */
+          }
+        }
+      });
     }
-    return o.deleteDatabase.call(this, name);
+    return r;
+  };
+
+  D.deleteObjectStore = function (this: IDBDatabase, name: string): void {
+    const info = observedDbs.get(this);
+    o.deleteObjectStore.call(this, name);
+    if (!info) return;
+    // Only possible inside an upgrade: the upgrade transaction is the
+    // one with this database's state.
+    const tx = upgradeTx.get(this);
+    const st = tx ? txState.get(tx) : undefined;
+    if (st) st.ops.push({ store: name, kind: "clear" });
   };
 
   D.transaction = function (
@@ -330,25 +420,8 @@ function patchPrototypes(): void {
         : mode !== undefined
           ? o.transaction.call(this, storeNames, mode)
           : o.transaction.call(this, storeNames);
-    const info = observedDbs.get(this);
-    if (info && tx.mode === "readwrite") {
-      const st: TxState = { db: info.name, subs: info.subs, ops: [] };
-      txState.set(tx, st);
-      tx.addEventListener("complete", () => {
-        if (st.ops.length === 0) return;
-        const ops = st.ops;
-        st.ops = [];
-        for (const s of st.subs) {
-          const mine = ops.filter((op) => !s.opts.excludeStore(st.db, op.store));
-          if (mine.length === 0) continue;
-          try {
-            s.opts.onCommit(st.db, mine);
-          } catch (err) {
-            reportListenerError(err);
-          }
-        }
-      });
-    }
+    const info = observedDbs.get(this) ?? lazyObserve(this);
+    if (info && tx.mode === "readwrite") track(tx, info.name, info.subs);
     return tx;
   };
 
@@ -376,8 +449,9 @@ function patchPrototypes(): void {
       const store = this.name;
       const snapshot = clone(value);
       const priorSlot = prior;
+      const self = this;
       r.addEventListener("success", () => {
-        st.ops.push({ store, kind: "put", key: r.result, value: snapshot, prior: priorSlot?.value });
+        st.ops.push({ store, kind: "put", key: r.result, value: withGeneratedKey(self, snapshot, r.result), prior: priorSlot?.value });
       });
     }
     return r;
@@ -389,8 +463,9 @@ function patchPrototypes(): void {
     if (st) {
       const store = this.name;
       const snapshot = clone(value);
+      const self = this;
       r.addEventListener("success", () => {
-        st.ops.push({ store, kind: "put", key: r.result, value: snapshot });
+        st.ops.push({ store, kind: "put", key: r.result, value: withGeneratedKey(self, snapshot, r.result) });
       });
     }
     return r;
@@ -398,20 +473,27 @@ function patchPrototypes(): void {
 
   S.delete = function (this: IDBObjectStore, query: IDBValidKey | IDBKeyRange): IDBRequest<undefined> {
     const st = tracked(this);
-    if (st) {
-      const store = this.name;
-      if (typeof IDBKeyRange === "function" && query instanceof IDBKeyRange) {
-        // Which keys a range covers is only knowable before the delete;
-        // getAllKeys runs first in the same transaction.
-        const kr = o.getAllKeys.call(this, query);
-        kr.addEventListener("success", () => {
-          for (const k of kr.result) st.ops.push({ store, kind: "del", key: k });
-        });
-      } else {
-        st.ops.push({ store, kind: "del", key: query as IDBValidKey });
-      }
+    if (!st) return o.delete.call(this, query);
+    const store = this.name;
+    // Which keys a range covers is only knowable before the delete;
+    // getAllKeys runs first in the same transaction. Either way the op is
+    // recorded when the delete succeeds, so it keeps its place among the
+    // transaction's other writes (a put then a delete of one key must
+    // end deleted).
+    let keys: IDBValidKey[] = [];
+    if (typeof IDBKeyRange === "function" && query instanceof IDBKeyRange) {
+      const kr = o.getAllKeys.call(this, query);
+      kr.addEventListener("success", () => {
+        keys = kr.result;
+      });
+    } else {
+      keys = [query as IDBValidKey];
     }
-    return o.delete.call(this, query);
+    const r = o.delete.call(this, query);
+    r.addEventListener("success", () => {
+      for (const k of keys) st.ops.push({ store, kind: "del", key: k });
+    });
+    return r;
   };
 
   S.clear = function (this: IDBObjectStore): IDBRequest<undefined> {
@@ -429,14 +511,29 @@ function patchPrototypes(): void {
   C.update = function (this: IDBCursor, value: unknown): IDBRequest<IDBValidKey> {
     const store = cursorStore(this);
     const st = tracked(store);
-    const prior = st ? clone((this as IDBCursorWithValue).value) : undefined;
+    // The stored record, not `cursor.value`: an app usually edits
+    // cursor.value in place and passes it back, so it already shows the
+    // change and the fields that changed could not be told.
+    let prior: { value: unknown } | null = null;
+    if (st && isPlainObject(value)) {
+      try {
+        const g = o.get.call(store, this.primaryKey);
+        const slot = (prior = { value: undefined });
+        g.addEventListener("success", () => {
+          slot.value = g.result;
+        });
+      } catch {
+        prior = null;
+      }
+    }
     const r = o.cursorUpdate.call(this, value);
     if (st) {
       const name = store.name;
       const snapshot = clone(value);
       const key = this.primaryKey;
+      const priorSlot = prior;
       r.addEventListener("success", () => {
-        st.ops.push({ store: name, kind: "put", key, value: snapshot, prior });
+        st.ops.push({ store: name, kind: "put", key, value: snapshot, prior: priorSlot?.value });
       });
     }
     return r;
@@ -445,8 +542,14 @@ function patchPrototypes(): void {
   C.delete = function (this: IDBCursor): IDBRequest<undefined> {
     const store = cursorStore(this);
     const st = tracked(store);
-    if (st) st.ops.push({ store: store.name, kind: "del", key: this.primaryKey });
-    return o.cursorDelete.call(this);
+    const key = this.primaryKey;
+    const r = o.cursorDelete.call(this);
+    if (st) {
+      r.addEventListener("success", () => {
+        st.ops.push({ store: store.name, kind: "del", key });
+      });
+    }
+    return r;
   };
 }
 
@@ -460,6 +563,7 @@ function restorePrototypes(): void {
   IDBObjectStore.prototype.add = o.add;
   IDBObjectStore.prototype.delete = o.delete;
   IDBObjectStore.prototype.clear = o.clear;
+  IDBDatabase.prototype.deleteObjectStore = o.deleteObjectStore;
   IDBCursor.prototype.update = o.cursorUpdate;
   IDBCursor.prototype.delete = o.cursorDelete;
   originals = null;
@@ -487,6 +591,9 @@ export function installIndexedDBHook(opts: HookOptions): InstalledHook | null {
   return {
     originalOpen: (name, version) =>
       version === undefined ? o.open.call(factory, name) : o.open.call(factory, name, version),
+    markInternal(db) {
+      internalDbs.add(db);
+    },
     uninstall() {
       subscribers.delete(sub);
       if (subscribers.size === 0) restorePrototypes();

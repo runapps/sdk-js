@@ -462,23 +462,36 @@ new RunApps({ sync: { databases: ["notes"], exclude: ["notes/thumbnails"] } });
 
 The app keeps using IndexedDB as before, directly or through Dexie, idb, idb-keyval and the like. The first `indexedDB.open` of a database on a new device waits (up to 5 s) for the user's data to arrive, so the first read already sees it.
 
-When it runs: on page load, when a database is opened, when the page is focused, shown again or back online, and every minute while it is visible; a write goes up about 2.5 s after it commits, and at once when the page is hidden or left (the write on `pagehide` uses `keepalive` so it can finish after the tab closes; one the browser drops waits in the device's log and goes up the next time the app is opened there). A reload never loses a write: pending changes are kept in IndexedDB and pushed first thing on the next load.
+When it runs: on page load, when a database is opened, when the page is focused, shown again or back online, and every minute while it is visible; a write goes up about 2.5 s after it commits, and at once when the page is hidden or left (the write on `pagehide` uses `keepalive` so it can finish after the tab closes; one the browser drops waits in the device's log and goes up the next time the app is opened there). A reload never loses a write: pending changes are kept in IndexedDB and pushed on the next load, and a write whose tab closed in the instant between its commit and the log is found and logged again.
 
 Data that was in the app's database before sync saw it — written before the SDK loaded, or before the app turned sync on — is uploaded on the first sync, once per store: every record the cloud has no entry for goes up, stamped older than any real edit, and records the cloud already has keep the cloud's version. When another device's changes are applied, or another tab of the same browser writes to the database (IndexedDB itself has no event for that), `db:change` names the store and keys so the app can re-read; `source` is `"remote"` or `"tab"`:
 
 ```ts
 client.events.on("db:change", ({ db, store, keys, cleared }) => refresh(store));
-client.sync.status();   // { state: "idle" | "syncing" | "offline" | "error" | "off", pending, lastSyncedAt }
-await client.sync.now(); // push and pull right away
+client.sync.status();     // { state: "idle" | "syncing" | "offline" | "error" | "off", pending, failed?, lastSyncedAt }
+await client.sync.ready(); // the first sync has run
+await client.sync.now();   // push and pull right away
 ```
 
-What syncs: every write that commits — `put`, `add`, `delete`, `clear`, cursor edits — with Dates, Maps, Sets, typed arrays and Blobs intact. Two devices editing one record keep both edits when they changed different fields of a plain object; otherwise the later write wins. Deleting a database drops its synced copy too. Data lives in the user's file space for the app under `db/`, so it counts as the user's storage.
+What syncs: every write that commits — `put`, `add`, `delete`, `clear`, cursor edits, writes made during a version upgrade, `deleteObjectStore` — with Dates, Maps, Sets, typed arrays, Blobs, Errors and `ImageData` intact. Two devices editing one record keep both edits when they changed different fields of a plain object; otherwise the later write wins. Data lives in the user's file space for the app under `db/`, so it counts as the user's storage.
+
+How it stays consistent:
+
+- **All or nothing.** A push that touches several shard files writes a journal first; other devices read the journal with the shards, so a push cut short (tab closed, network gone) is seen whole or not at all, and the next device to see it finishes it.
+- **Record by record.** A device applies only records newer than the version it holds, and never overwrites a local write still on its way up (in this tab or another). A record that cannot be stored here (a unique index clash) is skipped without holding up the rest.
+- **One clock.** Write times follow the server's clock and are always later than any write the device has seen, so an edit made after reading another device's record wins even if that device's clock runs ahead.
+- **Deletions reach everyone.** A device that comes back after the deletion record has expired (90 days) still drops the record.
+- **Values that cannot be synced** (functions, DOM nodes, objects containing themselves) are set aside with a console warning and counted in `status().failed`; the rest syncs.
 
 Keep in mind:
 
 - **Use your own keys.** `crypto.randomUUID()` or any key the app chooses. `autoIncrement` keys are assigned per device, so two devices creating records offline collide and the later one wins.
 - **Leave out what is local.** Caches, decoded media and anything large or rebuildable: `exclude: ["app/cache"]` (a store) or `exclude: ["cache"]` (a whole database). Databases whose names start with `__runapps` are never synced.
-- **Another user signing in** on the same browser starts from their own data; the previous user's synced stores are cleared locally before the app's first read.
+- **Writes before the first sync are defaults.** On a device that has never pulled a database (offline on first open), what the app writes loses to the user's data in the cloud, so an app's starting values never overwrite real ones. Records the cloud does not have still go up.
+- **Clearing and deleting.** Signed in, `clear()` and `indexedDB.deleteDatabase()` empty the user's data everywhere. Signed out they only empty this device (an app clearing its data on sign-out), and it comes back on the next sign-in.
+- **Another user signing in** on the same browser starts from their own data; the previous user's synced stores are cleared locally before the app's first read, and their unsent changes wait for them to sign in again.
+- **An edit wins over an older deletion.** A device that edits a record offline after another deleted it brings the record back. Field merges can combine fields from two writes into a record neither wrote; keep fields that must change together in one field (a nested object).
+- Writes made inside a Web Worker are not observed.
 - The badge shows the state: blue pulse while syncing, amber when offline or retrying, and the popover lists pending changes and the last sync time.
 
 ## Models

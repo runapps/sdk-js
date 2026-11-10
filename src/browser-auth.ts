@@ -194,6 +194,7 @@ export class BrowserAuth {
   private popupOpenedAt = 0;
   private userInfo: BrowserUser | null = null;
   private listeners: Array<(token: string) => void> = [];
+  private identityListeners: Array<() => void> = [];
   private parentHandshake: Promise<void> | null = null;
   private signingIn = false;
 
@@ -217,6 +218,29 @@ export class BrowserAuth {
     // between dev / prod gateways shouldn't accidentally reuse the
     // previous one's token.
     this.loadPersisted();
+
+    // Another tab of this app signed in (maybe as someone else) or out:
+    // follow it, so every tab acts for the same user. Sync relies on it:
+    // the local database is shared by the tabs.
+    if (typeof window.addEventListener === "function") window.addEventListener("storage", (e) => {
+      if (e.key !== storageKey(this.project)) return;
+      if (e.newValue) {
+        const before = this.token;
+        const beforeUser = this.userInfo?.id;
+        this.loadPersisted();
+        if (this.tokenIsFresh() && (this.token !== before || this.userInfo?.id !== beforeUser)) {
+          if (this.userInfo && !this.hideBadge) this.renderBadge();
+          this.notifyTokenChange();
+        }
+      } else if (this.token) {
+        this.token = null;
+        this.expiresAt = 0;
+        this.userInfo = null;
+        this.parentHandshake = null;
+        this.removeBadge();
+        this.notifyTokenChange();
+      }
+    });
 
     // Eager: install token from the URL fragment if the grant page
     // just redirected us back here.  This always WINS over a
@@ -327,6 +351,16 @@ export class BrowserAuth {
     return () => {
       const i = this.listeners.indexOf(handler);
       if (i >= 0) this.listeners.splice(i, 1);
+    };
+  }
+
+  /** @internal Subscribe to any change of who is signed in, including
+   *  a sign-in or sign-out in another tab. */
+  onIdentityChange(handler: () => void): () => void {
+    this.identityListeners.push(handler);
+    return () => {
+      const i = this.identityListeners.indexOf(handler);
+      if (i >= 0) this.identityListeners.splice(i, 1);
     };
   }
 
@@ -598,9 +632,18 @@ export class BrowserAuth {
       if (!this.hideBadge) this.renderBadge();
     }
     this.savePersisted();
-    for (const fn of this.listeners) {
+    this.notifyTokenChange();
+  }
+
+  /** Tell the subscribers: onTokenChange for a token acquired,
+   *  onIdentityChange for any change (also signing out in another tab). */
+  private notifyTokenChange() {
+    const fns: Array<() => void> = [...this.identityListeners];
+    const token = this.token;
+    if (token) for (const fn of this.listeners) fns.push(() => fn(token));
+    for (const fn of fns) {
       try {
-        fn(token);
+        fn();
       } catch (err) {
         console.warn("[runapps] onTokenChange handler threw", err);
       }
