@@ -5828,9 +5828,11 @@ var WAL_STALE_MS = 2 * 6e4;
 var OTHER_OWNER_TTL_MS = 30 * 24 * 3600 * 1e3;
 var MAX_FUTURE_MS = 24 * 3600 * 1e3;
 var MAX_APPLY_ATTEMPTS = 3;
+var SEEN_EVERY_MS = 10 * 6e4;
 var WAL_PREFIX = "__runapps_sync_wal:";
 var SEQ_KEY = "__runapps_sync_seq";
 var CLOCK_KEY = "__runapps_sync_clock";
+var OFFSET_KEY = "__runapps_sync_offset";
 var Clock = class {
   constructor() {
     __publicField(this, "last", 0);
@@ -6010,10 +6012,12 @@ var SyncEngine = class {
       journalKeepMs: options.journalKeepMs ?? 36e5
     };
     this.storage = deps.storage ?? defaultStorage();
-    const savedClock = Number(this.safeGet(CLOCK_KEY));
-    if (savedClock > 0) this.clock.last = savedClock;
-    this.clock.onOffset = (off) => void this.log.setMeta({ "clock:offset": off }).catch(() => {
-    });
+    this.readSharedClock();
+    this.clock.onOffset = (off) => {
+      this.safeSet(OFFSET_KEY, String(off));
+      void this.log.setMeta({ "clock:offset": off }).catch(() => {
+      });
+    };
     const excludedDbs = new Set(this.options.exclude.filter((e) => !e.includes("/")));
     const excludedStores = new Set(this.options.exclude.filter((e) => e.includes("/")));
     const only = new Set(this.options.databases);
@@ -6087,6 +6091,26 @@ var SyncEngine = class {
       return null;
     }
   }
+  safeSet(key, value) {
+    try {
+      this.storage.setItem(key, value);
+    } catch {
+    }
+  }
+  /** The tabs of an origin write with one clock: the server offset the
+   *  syncing tab learned, and the latest write time any of them made or
+   *  saw. Without it a tab that never syncs itself would stamp its writes
+   *  with the device's own (possibly wrong) time, and lose to a write
+   *  that was in fact made earlier. */
+  readSharedClock() {
+    const off = this.safeGet(OFFSET_KEY);
+    if (off !== null && Number.isFinite(Number(off))) this.clock.offset = Number(off);
+    const last = Number(this.safeGet(CLOCK_KEY));
+    if (last > this.clock.last && last < this.clock.wall() + MAX_FUTURE_MS) this.clock.last = last;
+  }
+  saveClock() {
+    if (!(Number(this.safeGet(CLOCK_KEY)) >= this.clock.last)) this.safeSet(CLOCK_KEY, String(this.clock.last));
+  }
   readSeq() {
     return this.safeGet(SEQ_KEY);
   }
@@ -6143,6 +6167,7 @@ var SyncEngine = class {
     const owner = this.deps.userId();
     const logged = [];
     const localClears = [];
+    this.readSharedClock();
     let ts = this.clock.now();
     for (const op of ops) {
       if (op.kind === "clear") {
@@ -6307,6 +6332,7 @@ var SyncEngine = class {
     });
     this.conns.delete(name);
     const owner = this.deps.userId();
+    this.readSharedClock();
     const ts = this.clock.now();
     const forget = async () => {
       const prefix = this.dbPrefix(name);
@@ -6521,7 +6547,7 @@ var SyncEngine = class {
   parseShardPath(path) {
     const p = this.options.prefix + "/";
     if (!path.startsWith(p)) return null;
-    const m = /^([^/@][^/]*)\/([^/]+)\/(\d+)\.json$/.exec(path.slice(p.length));
+    const m = /^(?!@j\/)([^/]+)\/([^/]+)\/(\d+)\.json$/.exec(path.slice(p.length));
     if (!m) return null;
     try {
       return { db: decodeURIComponent(m[1]), store: decodeURIComponent(m[2]), n: Number(m[3]) };
@@ -6546,7 +6572,10 @@ var SyncEngine = class {
         for (const [path, etag] of await this.log.marks()) this.etags.set(path, etag);
         for (const k of (await this.log.metaWithPrefix("pulled:")).keys()) this.pulled.add(k.slice(7));
         const off = await this.log.getMeta("clock:offset");
-        if (typeof off === "number") this.clock.offset = off;
+        if (typeof off === "number") {
+          this.clock.offset = off;
+          if (this.safeGet(OFFSET_KEY) === null) this.safeSet(OFFSET_KEY, String(off));
+        }
         await this.reloadSchemas();
       })();
       this.metaLoaded.catch(() => {
@@ -6964,6 +6993,9 @@ var SyncEngine = class {
     for (const p of [...this.listedPaths]) if (p.startsWith(prefix)) this.listedPaths.delete(p);
     for (const e of listing) this.listedPaths.add(e.path);
     this.listedPrefixes.add(prefix);
+    for (const p of [...this.shardCache.keys()]) {
+      if (p.startsWith(prefix) && !this.listedPaths.has(p)) this.shardCache.delete(p);
+    }
   }
   async storeBlob(blob) {
     const bytes = new Uint8Array(await blob.arrayBuffer());
@@ -7023,6 +7055,7 @@ var SyncEngine = class {
   async pullDb(db, shardEntries, journalEntries, check) {
     const schema = this.schemas.get(db);
     if (!schema) return;
+    const lastSeen = await this.log.getMeta("seen:" + db);
     const want = (store) => schema.has(store) && !this.storeExcluded(db, store);
     const views = /* @__PURE__ */ new Map();
     const marks = /* @__PURE__ */ new Map();
@@ -7059,6 +7092,7 @@ var SyncEngine = class {
         setView(store, n, null);
         marks.set(path, "");
       } else {
+        this.shardCache.delete(path);
         setView(store, n, this.etags.has(path) ? null : emptyShard());
         marks.set(path, "");
       }
@@ -7150,7 +7184,7 @@ var SyncEngine = class {
     }
     if (views.size > 0) {
       check();
-      await this.applyDb(db, { views, marks, seeds }, check);
+      await this.applyDb(db, { views, marks, seeds, whole: true, lastSeen }, check);
     }
     if (Object.keys(jvNow).length) await this.log.setMeta(jvNow);
     for (const [p, j] of toFold) await this.foldJournal(db, p, j, check);
@@ -7169,6 +7203,8 @@ var SyncEngine = class {
       }
     }
     if (Object.keys(drop).length) await this.log.setMeta(drop);
+    const wall = this.clock.wall();
+    if (lastSeen === void 0 || wall - lastSeen > SEEN_EVERY_MS || lastSeen > wall) await this.log.setMeta({ ["seen:" + db]: wall });
   }
   journalOps(o, n) {
     const out = [];
@@ -7305,6 +7341,7 @@ var SyncEngine = class {
         }
       }
     }
+    this.saveClock();
     const userId = this.deps.userId();
     let out = "retry";
     for (let attempt = 0; out === "retry"; attempt++) {
@@ -7323,6 +7360,7 @@ var SyncEngine = class {
         etagSet.set(path, void 0);
         continue;
       }
+      if (out.recheck.has(path)) continue;
       const failures = out.failures.get(path) ?? 0;
       const tries = (this.applyFailures.get(path) ?? 0) + 1;
       if (failures === 0 || tries >= MAX_APPLY_ATTEMPTS) {
@@ -7333,15 +7371,15 @@ var SyncEngine = class {
         this.applyFailures.set(path, tries);
       }
     }
-    await this.log.commitApply(db, out.applied, etagSet);
-    for (const [path, etag] of etagSet) {
-      if (etag === void 0) this.etags.delete(path);
-      else this.etags.set(path, etag);
-    }
     if (out.adopted.length) {
       await this.log.append(out.adopted);
       this.pendingCache = null;
       this.adoptedAny = true;
+    }
+    await this.log.commitApply(db, out.applied, etagSet);
+    for (const [path, etag] of etagSet) {
+      if (etag === void 0) this.etags.delete(path);
+      else this.etags.set(path, etag);
     }
     for (const [store, keys] of out.keys) {
       if (keys.length) this.emitChange({ db, store, keys, cleared: false, source: "remote" });
@@ -7358,7 +7396,7 @@ var SyncEngine = class {
         reject(e);
         return;
       }
-      const out = { applied: /* @__PURE__ */ new Map(), keys: /* @__PURE__ */ new Map(), failures: /* @__PURE__ */ new Map(), adopted: [], scanned: /* @__PURE__ */ new Set() };
+      const out = { applied: /* @__PURE__ */ new Map(), keys: /* @__PURE__ */ new Map(), failures: /* @__PURE__ */ new Map(), recheck: /* @__PURE__ */ new Set(), adopted: [], scanned: /* @__PURE__ */ new Set() };
       let retry = false;
       tx.oncomplete = () => resolve(retry ? "retry" : out);
       tx.onabort = () => retry ? resolve("retry") : reject(tx.error ?? new Error("apply aborted"));
@@ -7441,6 +7479,9 @@ var SyncEngine = class {
       );
     };
     const wall = this.clock.wall();
+    const whole = input.whole ?? false;
+    const away = input.lastSeen !== void 0 && wall - input.lastSeen > TOMBSTONE_TTL_MS;
+    const recheck = (n) => out.recheck.add(this.shardPath(db, store, n));
     const isSeed = (n) => input.seeds?.has(store + "\0" + n) ?? false;
     for (const [n, view] of viewMap) {
       if (view && isSeed(n)) {
@@ -7459,7 +7500,14 @@ var SyncEngine = class {
         if (!validRec(rec) || this.shardOf(kid) !== n) continue;
         handled.add(kid);
         const a = appliedS.get(kid);
-        if (!newer(rec, a)) continue;
+        if (!newer(rec, a)) {
+          if (a && rec.t < a.t && kidTs(kid) === 0 && clearTs === 0) {
+            const key2 = localKeys.get(kid);
+            if (!whole) recheck(n);
+            else if (key2 !== void 0) adopt(kid, key2, a.t);
+          }
+          continue;
+        }
         if (kidTs(kid) > rec.t || clearTs >= rec.t) continue;
         const entry = { t: rec.t, s: n, h: recHash(rec) };
         if (rec.d) {
@@ -7509,7 +7557,15 @@ var SyncEngine = class {
       for (const [kid, a] of appliedS) {
         if (a.s !== n || handled.has(kid)) continue;
         if (kidTs(kid) > 0) continue;
-        if (a.t <= view.cleared || wall - a.t > TOMBSTONE_TTL_MS) {
+        if (a.t <= view.cleared) {
+          removeLocal(kid, n);
+          continue;
+        }
+        if (!whole) {
+          recheck(n);
+          continue;
+        }
+        if (away) {
           removeLocal(kid, n);
           continue;
         }
@@ -7536,7 +7592,7 @@ var SyncEngine = class {
           continue;
         }
       }
-      adopt(kid, key, view ? Math.max(ADOPTED_TS, view.cleared + 1e-3) : ADOPTED_TS);
+      adopt(kid, key, a ? a.t : view ? Math.max(ADOPTED_TS, view.cleared + 1e-3) : ADOPTED_TS);
     }
     if (scan && scanComplete) out.scanned.add(store);
   }

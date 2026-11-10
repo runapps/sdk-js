@@ -479,8 +479,9 @@ How it stays consistent:
 
 - **All or nothing.** A push that touches several shard files writes a journal first; other devices read the journal with the shards, so a push cut short (tab closed, network gone) is seen whole or not at all, and the next device to see it finishes it.
 - **Record by record.** A device applies only records newer than the version it holds, and never overwrites a local write still on its way up (in this tab or another). A record that cannot be stored here (a unique index clash) is skipped without holding up the rest.
-- **One clock.** Write times follow the server's clock and are always later than any write the device has seen, so an edit made after reading another device's record wins even if that device's clock runs ahead.
-- **Deletions reach everyone.** A device that comes back after the deletion record has expired (90 days) still drops the record.
+- **One clock.** Write times follow the server's clock, in every tab, and are always later than any write the device has seen, so an edit made after reading another device's record wins even if a clock runs ahead or behind.
+- **Deletions reach everyone.** A deletion is remembered for 90 days; a device that was away longer drops what the cloud no longer has.
+- **A lost file loses nothing.** If a sync file disappears from the user's storage (deleted by hand, or unreadable), the devices that hold its records upload them again, each with the newest version it has; no device deletes a record because the file was rebuilt without it.
 - **Values that cannot be synced** (functions, DOM nodes, objects containing themselves) are set aside with a console warning and counted in `status().failed`; the rest syncs.
 
 Keep in mind:

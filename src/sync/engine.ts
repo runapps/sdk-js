@@ -31,9 +31,12 @@
 // changed shards into writes on the app's database through the engine's
 // own connection, which the hook does not observe. The log also records,
 // per record, the cloud version this device holds ("applied"): a pulled
-// record is written locally only when it is newer than that, a record
-// the cloud no longer has is deleted here, and a local record the cloud
-// has never had is uploaded ("adopted").
+// record is written locally only when it is newer than that; a record
+// the cloud cleared, or deleted while this device was away for longer
+// than deletions are remembered, is deleted here; and a local record the
+// cloud does not have for any other reason — never had it, or lost it
+// with a shard file, or holds an older version — is uploaded
+// ("adopted").
 
 import { changedFields, decodeKey, decodeValue, encodeKey, encodeValue, extractKey, hash32, injectKey, keyId, type BlobRef } from "./codec.js";
 import { type CommittedOp, type InstalledHook, installIndexedDBHook } from "./hook.js";
@@ -297,10 +300,13 @@ const MAX_FUTURE_MS = 24 * 3600 * 1000;
 /** Applies of one shard that fail before it is taken as seen anyway (a
  *  record that can never be stored must not cost a download a minute). */
 const MAX_APPLY_ATTEMPTS = 3;
+/** How often the time of the last pull is written down. */
+const SEEN_EVERY_MS = 10 * 60_000;
 
 const WAL_PREFIX = "__runapps_sync_wal:";
 const SEQ_KEY = "__runapps_sync_seq";
 const CLOCK_KEY = "__runapps_sync_clock";
+const OFFSET_KEY = "__runapps_sync_offset";
 
 /** Hybrid logical clock: wall time with the server's offset, never
  *  going backwards, and later than every write it has seen. */
@@ -497,9 +503,11 @@ export class SyncEngine {
       journalKeepMs: options.journalKeepMs ?? 3600_000,
     };
     this.storage = deps.storage ?? defaultStorage();
-    const savedClock = Number(this.safeGet(CLOCK_KEY));
-    if (savedClock > 0) this.clock.last = savedClock;
-    this.clock.onOffset = (off) => void this.log.setMeta({ "clock:offset": off }).catch(() => {});
+    this.readSharedClock();
+    this.clock.onOffset = (off) => {
+      this.safeSet(OFFSET_KEY, String(off));
+      void this.log.setMeta({ "clock:offset": off }).catch(() => {});
+    };
 
     const excludedDbs = new Set(this.options.exclude.filter((e) => !e.includes("/")));
     const excludedStores = new Set(this.options.exclude.filter((e) => e.includes("/")));
@@ -589,6 +597,30 @@ export class SyncEngine {
     }
   }
 
+  private safeSet(key: string, value: string): void {
+    try {
+      this.storage.setItem(key, value);
+    } catch {
+      /* storage unavailable */
+    }
+  }
+
+  /** The tabs of an origin write with one clock: the server offset the
+   *  syncing tab learned, and the latest write time any of them made or
+   *  saw. Without it a tab that never syncs itself would stamp its writes
+   *  with the device's own (possibly wrong) time, and lose to a write
+   *  that was in fact made earlier. */
+  private readSharedClock(): void {
+    const off = this.safeGet(OFFSET_KEY);
+    if (off !== null && Number.isFinite(Number(off))) this.clock.offset = Number(off);
+    const last = Number(this.safeGet(CLOCK_KEY));
+    if (last > this.clock.last && last < this.clock.wall() + MAX_FUTURE_MS) this.clock.last = last;
+  }
+
+  private saveClock(): void {
+    if (!(Number(this.safeGet(CLOCK_KEY)) >= this.clock.last)) this.safeSet(CLOCK_KEY, String(this.clock.last));
+  }
+
   private readSeq(): string | null {
     return this.safeGet(SEQ_KEY);
   }
@@ -658,6 +690,7 @@ export class SyncEngine {
     const localClears: string[] = [];
     // One time for the transaction; a clear starts a new one, so what
     // the transaction writes after it is newer than the clear.
+    this.readSharedClock();
     let ts = this.clock.now();
     for (const op of ops) {
       if (op.kind === "clear") {
@@ -843,6 +876,7 @@ export class SyncEngine {
     this.conns.get(name)?.then((db) => db?.close()).catch(() => {});
     this.conns.delete(name);
     const owner = this.deps.userId();
+    this.readSharedClock();
     const ts = this.clock.now();
     const forget = async () => {
       const prefix = this.dbPrefix(name);
@@ -1106,7 +1140,9 @@ export class SyncEngine {
   private parseShardPath(path: string): { db: string; store: string; n: number } | null {
     const p = this.options.prefix + "/";
     if (!path.startsWith(p)) return null;
-    const m = /^([^/@][^/]*)\/([^/]+)\/(\d+)\.json$/.exec(path.slice(p.length));
+    // Journals live under "@j/"; any other name is a database (one may
+    // well start with "@").
+    const m = /^(?!@j\/)([^/]+)\/([^/]+)\/(\d+)\.json$/.exec(path.slice(p.length));
     if (!m) return null;
     try {
       return { db: decodeURIComponent(m[1]!), store: decodeURIComponent(m[2]!), n: Number(m[3]) };
@@ -1133,7 +1169,10 @@ export class SyncEngine {
         for (const [path, etag] of await this.log.marks()) this.etags.set(path, etag);
         for (const k of (await this.log.metaWithPrefix("pulled:")).keys()) this.pulled.add(k.slice(7));
         const off = await this.log.getMeta<number>("clock:offset");
-        if (typeof off === "number") this.clock.offset = off;
+        if (typeof off === "number") {
+          this.clock.offset = off;
+          if (this.safeGet(OFFSET_KEY) === null) this.safeSet(OFFSET_KEY, String(off));
+        }
         await this.reloadSchemas();
       })();
       this.metaLoaded.catch(() => {
@@ -1619,6 +1658,12 @@ export class SyncEngine {
     for (const p of [...this.listedPaths]) if (p.startsWith(prefix)) this.listedPaths.delete(p);
     for (const e of listing) this.listedPaths.add(e.path);
     this.listedPrefixes.add(prefix);
+    // A copy of a file the listing no longer shows is a copy of nothing:
+    // a write merged into it would find "nothing to change" and never
+    // put the file back.
+    for (const p of [...this.shardCache.keys()]) {
+      if (p.startsWith(prefix) && !this.listedPaths.has(p)) this.shardCache.delete(p);
+    }
   }
 
   private async storeBlob(blob: Blob): Promise<BlobRef> {
@@ -1687,6 +1732,7 @@ export class SyncEngine {
   ): Promise<void> {
     const schema = this.schemas.get(db);
     if (!schema) return;
+    const lastSeen = await this.log.getMeta<number>("seen:" + db);
     const want = (store: string) => schema.has(store) && !this.storeExcluded(db, store);
     /** Per store, the shards as read: null for one that vanished or
      *  cannot be read (what this device held of it is forgotten, and its
@@ -1729,6 +1775,7 @@ export class SyncEngine {
         setView(store, n, null);
         marks.set(path, "");
       } else {
+        this.shardCache.delete(path);
         setView(store, n, this.etags.has(path) ? null : emptyShard());
         marks.set(path, "");
       }
@@ -1834,7 +1881,7 @@ export class SyncEngine {
     // 4. Apply, in one transaction over the database's stores.
     if (views.size > 0) {
       check();
-      await this.applyDb(db, { views, marks, seeds }, check);
+      await this.applyDb(db, { views, marks, seeds, whole: true, lastSeen }, check);
     }
     if (Object.keys(jvNow).length) await this.log.setMeta(jvNow);
 
@@ -1857,6 +1904,10 @@ export class SyncEngine {
       }
     }
     if (Object.keys(drop).length) await this.log.setMeta(drop);
+
+    // When this device last compared itself with the cloud (see `away`).
+    const wall = this.clock.wall();
+    if (lastSeen === undefined || wall - lastSeen > SEEN_EVERY_MS || lastSeen > wall) await this.log.setMeta({ ["seen:" + db]: wall });
   }
 
   private journalOps(o: JournalOp[], n: number): ShardOp[] {
@@ -1971,6 +2022,12 @@ export class SyncEngine {
       settling?: Set<number>;
       own?: Map<string, Map<string, ShardRecord>>;
       seeds?: Set<string>;
+      /** The views are the cloud's whole state of their shards (a pull:
+       *  shards and the journals not yet folded). Only then is a record
+       *  the cloud lacks, or holds an older version of, acted on. */
+      whole?: boolean;
+      /** When this device last pulled the database before this pull. */
+      lastSeen?: number;
     },
     check: () => void,
   ): Promise<Set<string>> {
@@ -2017,6 +2074,7 @@ export class SyncEngine {
       }
     }
 
+    this.saveClock(); // what was just witnessed, for the other tabs
     const userId = this.deps.userId();
     let out: ApplyResult | "retry" = "retry";
     for (let attempt = 0; out === "retry"; attempt++) {
@@ -2037,6 +2095,7 @@ export class SyncEngine {
         etagSet.set(path, undefined);
         continue;
       }
+      if (out.recheck.has(path)) continue;
       const failures = out.failures.get(path) ?? 0;
       const tries = (this.applyFailures.get(path) ?? 0) + 1;
       if (failures === 0 || tries >= MAX_APPLY_ATTEMPTS) {
@@ -2047,15 +2106,17 @@ export class SyncEngine {
         this.applyFailures.set(path, tries);
       }
     }
-    await this.log.commitApply(db, out.applied, etagSet);
-    for (const [path, etag] of etagSet) {
-      if (etag === undefined) this.etags.delete(path);
-      else this.etags.set(path, etag);
-    }
+    // The uploads first: were the page to die between the two writes, a
+    // record logged twice is harmless, one forgotten is not.
     if (out.adopted.length) {
       await this.log.append(out.adopted);
       this.pendingCache = null;
       this.adoptedAny = true;
+    }
+    await this.log.commitApply(db, out.applied, etagSet);
+    for (const [path, etag] of etagSet) {
+      if (etag === undefined) this.etags.delete(path);
+      else this.etags.set(path, etag);
     }
     for (const [store, keys] of out.keys) {
       if (keys.length) this.emitChange({ db, store, keys, cleared: false, source: "remote" });
@@ -2068,12 +2129,7 @@ export class SyncEngine {
     h: IDBDatabase,
     db: string,
     present: string[],
-    input: {
-      views: Map<string, Map<number, Shard | null>>;
-      scan?: Set<string>;
-      own?: Map<string, Map<string, ShardRecord>>;
-      seeds?: Set<string>;
-    },
+    input: ApplyInput,
     applied: Map<string, Map<string, AppliedEntry>>,
     decoded: Map<string, { ok: true; value: unknown } | { ok: false }>,
     pending: LoggedOp[],
@@ -2089,7 +2145,7 @@ export class SyncEngine {
         reject(e);
         return;
       }
-      const out: ApplyResult = { applied: new Map(), keys: new Map(), failures: new Map(), adopted: [], scanned: new Set() };
+      const out: ApplyResult = { applied: new Map(), keys: new Map(), failures: new Map(), recheck: new Set(), adopted: [], scanned: new Set() };
       let retry = false;
       tx.oncomplete = () => resolve(retry ? "retry" : out);
       tx.onabort = () => (retry ? resolve("retry") : reject(tx.error ?? new Error("apply aborted")));
@@ -2124,7 +2180,7 @@ export class SyncEngine {
     st: IDBObjectStore,
     db: string,
     store: string,
-    input: { views: Map<string, Map<number, Shard | null>>; scan?: Set<string>; own?: Map<string, Map<string, ShardRecord>>; seeds?: Set<string> },
+    input: ApplyInput,
     appliedS: Map<string, AppliedEntry>,
     decoded: Map<string, { ok: true; value: unknown } | { ok: false }>,
     localKeys: Map<string, IDBValidKey>,
@@ -2186,6 +2242,11 @@ export class SyncEngine {
       );
     };
     const wall = this.clock.wall();
+    const whole = input.whole ?? false;
+    // Away longer than deletions are remembered: what the cloud no longer
+    // has was deleted meanwhile.
+    const away = input.lastSeen !== undefined && wall - input.lastSeen > TOMBSTONE_TTL_MS;
+    const recheck = (n: number) => out.recheck.add(this.shardPath(db, store, n));
 
     const isSeed = (n: number) => input.seeds?.has(store + "\u0000" + n) ?? false;
     for (const [n, view] of viewMap) {
@@ -2207,7 +2268,17 @@ export class SyncEngine {
         if (!validRec(rec) || this.shardOf(kid) !== n) continue;
         handled.add(kid);
         const a = appliedS.get(kid);
-        if (!newer(rec, a)) continue;
+        if (!newer(rec, a)) {
+          // The cloud holds an older version than the one held here: it
+          // lost writes (a shard rebuilt by a device that was behind).
+          // The version held here goes up again.
+          if (a && rec.t < a.t && kidTs(kid) === 0 && clearTs === 0) {
+            const key = localKeys.get(kid);
+            if (!whole) recheck(n);
+            else if (key !== undefined) adopt(kid, key, a.t);
+          }
+          continue;
+        }
         // A local write newer than this record is on its way up.
         if (kidTs(kid) > rec.t || clearTs >= rec.t) continue;
         const entry: AppliedEntry = { t: rec.t, s: n, h: recHash(rec) };
@@ -2255,14 +2326,25 @@ export class SyncEngine {
           () => fail(n),
         );
       }
-      // Held here, but no longer in the cloud: deleted there — by a
-      // clear, or by a deletion whose tombstone has expired. Anything
-      // else is a shard rebuilt without it (an unreadable one replaced):
-      // upload it again rather than lose it.
+      // Held here, but no longer in the cloud. Cleared there: deleted
+      // here. Otherwise a deletion leaves a tombstone for 90 days, so
+      // only a device that has not pulled for that long can have missed
+      // one: for it the record was deleted. For any other device the
+      // shard was rebuilt without the record (its file lost, and written
+      // again by a device that never had it): upload it again rather
+      // than lose it.
       for (const [kid, a] of appliedS) {
         if (a.s !== n || handled.has(kid)) continue;
         if (kidTs(kid) > 0) continue; // written here since: pushed
-        if (a.t <= view.cleared || wall - a.t > TOMBSTONE_TTL_MS) {
+        if (a.t <= view.cleared) {
+          removeLocal(kid, n);
+          continue;
+        }
+        if (!whole) {
+          recheck(n); // a journal not folded yet may hold it
+          continue;
+        }
+        if (away) {
           removeLocal(kid, n);
           continue;
         }
@@ -2292,7 +2374,8 @@ export class SyncEngine {
           continue;
         }
       }
-      adopt(kid, key, view ? Math.max(ADOPTED_TS, view.cleared + 0.001) : ADOPTED_TS);
+      // A record of a vanished shard goes back with the time it had.
+      adopt(kid, key, a ? a.t : view ? Math.max(ADOPTED_TS, view.cleared + 0.001) : ADOPTED_TS);
     }
     if (scan && scanComplete) out.scanned.add(store);
   }
@@ -2364,10 +2447,22 @@ export class SyncEngine {
   }
 }
 
+interface ApplyInput {
+  views: Map<string, Map<number, Shard | null>>;
+  scan?: Set<string>;
+  own?: Map<string, Map<string, ShardRecord>>;
+  seeds?: Set<string>;
+  whole?: boolean;
+  lastSeen?: number;
+}
+
 interface ApplyResult {
   applied: Map<string, Map<string, AppliedEntry | undefined>>;
   keys: Map<string, IDBValidKey[]>;
   failures: Map<string, number>;
+  /** Shards whose view was not the cloud's whole state and left a
+   *  question only a pull can answer: not recorded as applied. */
+  recheck: Set<string>;
   adopted: LoggedOp[];
   scanned: Set<string>;
 }

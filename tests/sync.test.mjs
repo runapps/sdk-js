@@ -134,6 +134,21 @@ function device(remote, { user = "u1", options = {}, factory = new IDBFactory(),
   };
 }
 
+/** The SDK's own log database of a device. */
+async function syncDb(factory, fn, mode = "readonly") {
+  const db = await req(factory.open("__runapps_sync__"));
+  try {
+    const tx = db.transaction(["ops", "meta"], mode);
+    const out = await fn(tx);
+    if (mode === "readwrite") await done(tx);
+    return out;
+  } finally {
+    db.close();
+  }
+}
+const loggedOps = (factory) => syncDb(factory, (tx) => req(tx.objectStore("ops").getAll()));
+const setMeta = (factory, key, value) => syncDb(factory, (tx) => void tx.objectStore("meta").put(value, key), "readwrite");
+
 // ── Tests ───────────────────────────────────────────────────────────
 
 test("hooked open behaves like the real request", async () => {
@@ -1176,6 +1191,7 @@ test("a deletion whose tombstone expired while a device was away still reaches i
     assert.equal((await B.readAll(dbB, "notes")).length, 2);
     // B goes away; "gone" is deleted elsewhere and, 90 days on, its
     // tombstone is purged.
+    await setMeta(B.factory, "seen:app", Date.now() - 100 * 24 * 3600_000);
     remote.objects.set(path, { etag: "x2", body: JSON.stringify({ v: 1, cleared: 0, r: { '"kept"': rec("kept") } }) });
     await B.engine.now();
     assert.deepEqual((await B.readAll(dbB, "notes")).map((r) => r.id), ["kept"]);
@@ -1273,6 +1289,188 @@ test("a vanished or unreadable shard is rebuilt from the devices that hold its r
     await A.engine.now();
     assert.equal(Object.keys(remote.records("app", "notes")).length, 2, "rewritten as valid JSON");
     assert.equal((await A.readAll(db, "notes")).length, 2);
+    db.close();
+  } finally {
+    A.dispose();
+  }
+});
+
+test("records survive, whatever their age, when another device recreated their shard without them", async () => {
+  const remote = new MemoryRemote();
+  const longAgo = Date.now() - 100 * 24 * 3600_000;
+  const path = "db/app/notes/0.json";
+  const rec = (id) => ({ k: id, v: { id }, t: longAgo });
+  remote.objects.set(path, { etag: "x1", body: JSON.stringify({ v: 1, cleared: 0, r: { '"old1"': rec("old1"), '"old2"': rec("old2") } }) });
+  const A = device(remote, { options: { shards: 1 } });
+  const C = device(remote, { options: { shards: 1 } });
+  try {
+    const dbA = await A.openApp();
+    assert.equal((await A.readAll(dbA, "notes")).length, 2);
+    // The user deletes the app's sync files; a new device is the first
+    // to write after that. A syncs every day: it cannot have missed a
+    // deletion, so what the shard lacks was lost, not deleted.
+    remote.objects.delete(path);
+    const dbC = await C.openApp();
+    await C.write(dbC, "notes", (st) => st.put({ id: "new" }));
+    await C.engine.now();
+    await A.engine.now();
+    assert.deepEqual((await A.readAll(dbA, "notes")).map((r) => r.id).sort(), ["new", "old1", "old2"], "A keeps its records");
+    const cloud = remote.records("app", "notes");
+    assert.equal(Object.keys(cloud).length, 3, "and uploads them again");
+    assert.equal(cloud['"old1"'].t, longAgo, "with the time they had");
+    await C.engine.now();
+    assert.equal((await C.readAll(dbC, "notes")).length, 3);
+    dbA.close();
+    dbC.close();
+  } finally {
+    A.dispose();
+    C.dispose();
+  }
+});
+
+test("a newer version held here goes up again when the cloud fell back to an older one", async () => {
+  const remote = new MemoryRemote();
+  const A = device(remote, { options: { shards: 1 } });
+  const B = device(remote, { options: { shards: 1 } });
+  try {
+    const dbA = await A.openApp();
+    await A.write(dbA, "notes", (st) => { st.put({ id: "n", v: 1 }); st.put({ id: "same", v: 1 }); });
+    await A.engine.now();
+    const dbB = await B.openApp();
+    assert.equal((await B.get(dbB, "notes", "n")).v, 1);
+    await sleep(5);
+    await A.write(dbA, "notes", (st) => st.put({ id: "n", v: 2 }));
+    await A.engine.now();
+    // The shard is lost; B, which never saw v2, is the first to notice
+    // and rebuilds it from what it has.
+    remote.objects.delete("db/app/notes/0.json");
+    await B.engine.now();
+    assert.equal(remote.records("app", "notes")['"n"'].v.v, 1);
+    const puts = remote.puts;
+    await A.engine.now();
+    assert.equal(remote.records("app", "notes")['"n"'].v.v, 2, "A's newer version is back in the cloud");
+    assert.equal(remote.puts - puts, 1, "in one write");
+    assert.equal((await A.get(dbA, "notes", "n")).v, 2);
+    await B.engine.now();
+    assert.equal((await B.get(dbB, "notes", "n")).v, 2, "and reaches B");
+    await A.engine.now();
+    await B.engine.now();
+    assert.equal(remote.puts - puts, 1, "nothing goes back and forth");
+    dbA.close();
+    dbB.close();
+  } finally {
+    A.dispose();
+    B.dispose();
+  }
+});
+
+test("a tab that never syncs itself writes with the clock the syncing tab learned", async () => {
+  const base = new MemoryRemote();
+  const skew = 10 * 60_000; // this device's clock is 10 minutes slow
+  const remote = Object.create(base);
+  remote.getJSON = async (...a) => ({ ...(await base.getJSON(...a)), serverTime: Date.now() + skew });
+  remote.putJSON = async (...a) => ({ ...(await base.putJSON(...a)), serverTime: Date.now() + skew });
+  const storage = new MemStorage();
+  const A = device(remote, { options: { shards: 1 }, storage });
+  const dbA = await A.openApp();
+  await A.write(dbA, "notes", (st) => st.put({ id: "n", v: 1 }));
+  await A.engine.now();
+  await A.write(dbA, "notes", (st) => st.put({ id: "n", v: 2 }));
+  await A.engine.now();
+  const tLeader = base.records("app", "notes")['"n"'].t;
+  assert.ok(Math.abs(tLeader - (Date.now() + skew)) < 5000, "the syncing tab writes in server time");
+  dbA.close();
+  A.dispose();
+  // Another tab, open since long before those writes.
+  storage.setItem("__runapps_sync_clock", String(Date.now() - 3600_000));
+  const F = device(remote, { options: { shards: 1 }, storage, factory: A.factory });
+  F.engine.leader = false;
+  try {
+    const dbF = await F.openApp();
+    await F.write(dbF, "notes", (st) => st.put({ id: "n", v: 3 }));
+    await sleep(30);
+    const ops = await loggedOps(A.factory);
+    assert.equal(ops.length, 1);
+    assert.ok(ops[0].ts > tLeader, "its write is later than the one made before it");
+    assert.ok(Math.abs(ops[0].ts - (Date.now() + skew)) < 5000, "and in server time");
+    dbF.close();
+  } finally {
+    F.dispose();
+  }
+});
+
+test("a tab that never syncs itself writes later than what the syncing tab pulled", async () => {
+  const remote = new MemoryRemote();
+  const ahead = Date.now() + 10 * 60_000;
+  remote.objects.set("db/app/notes/0.json", {
+    etag: "x1",
+    body: JSON.stringify({ v: 1, cleared: 0, r: { '"n1"': { k: "n1", v: { id: "n1", v: "from a clock ahead" }, t: ahead } } }),
+  });
+  const storage = new MemStorage();
+  storage.setItem("__runapps_sync_clock", String(Date.now() - 3600_000));
+  const F = device(remote, { options: { shards: 1 }, storage }); // constructed first: the older tab
+  F.engine.leader = false;
+  await sleep(5);
+  F.dispose();
+  const A = device(remote, { options: { shards: 1 }, storage, factory: F.factory });
+  const dbA = await A.openApp();
+  assert.equal((await A.get(dbA, "notes", "n1")).v, "from a clock ahead");
+  dbA.close();
+  A.dispose();
+  assert.ok(Number(storage.getItem("__runapps_sync_clock")) >= ahead, "what the syncing tab saw is shared");
+  const G = device(remote, { options: { shards: 1 }, storage, factory: F.factory });
+  G.engine.leader = false;
+  try {
+    const dbG = await G.openApp();
+    await G.write(dbG, "notes", (st) => st.put({ id: "n1", v: "edited" }));
+    await sleep(30);
+    const ops = await loggedOps(F.factory);
+    assert.ok(ops[0].ts > ahead, "the edit is later than the record it edits");
+    dbG.close();
+  } finally {
+    G.dispose();
+  }
+});
+
+test("a database whose name starts with @ syncs like any other", async () => {
+  const remote = new MemoryRemote();
+  const open = (factory) => new Promise((resolve, reject) => {
+    const r = factory.open("@me", 1);
+    r.onupgradeneeded = () => r.result.createObjectStore("notes", { keyPath: "id" });
+    r.onsuccess = () => resolve(r.result);
+    r.onerror = () => reject(r.error);
+  });
+  const A = device(remote);
+  const dbA = await open(A.factory);
+  await A.write(dbA, "notes", (st) => { for (let i = 0; i < 20; i++) st.put({ id: "n" + i }); });
+  await A.engine.now();
+  dbA.close();
+  A.dispose();
+  const B = device(remote);
+  try {
+    const dbB = await open(B.factory);
+    assert.equal((await B.readAll(dbB, "notes")).length, 20);
+    dbB.close();
+  } finally {
+    B.dispose();
+  }
+});
+
+test("a vanished shard is written again even when this page still remembers its content", async () => {
+  const remote = new MemoryRemote();
+  const A = device(remote, { options: { shards: 1 } });
+  try {
+    const db = await A.openApp();
+    await A.write(db, "kv", (st) => st.put({ v: 1, list: [1] }, "state"));
+    await A.engine.now();
+    // Written again unchanged: the shard's record now carries its field
+    // times, as any record edited twice does.
+    await A.write(db, "kv", (st) => st.put({ v: 1, list: [1] }, "state"));
+    await A.engine.now();
+    remote.objects.delete("db/app/kv/0.json");
+    await A.engine.now();
+    assert.ok(remote.records("app", "kv")['"state"'], "back in the cloud without a reload");
+    assert.deepEqual(await A.get(db, "kv", "state"), { v: 1, list: [1] });
     db.close();
   } finally {
     A.dispose();

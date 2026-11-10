@@ -188,6 +188,14 @@ export declare class SyncEngine {
     /** Send to the other tabs of this origin. */
     private post;
     private safeGet;
+    private safeSet;
+    /** The tabs of an origin write with one clock: the server offset the
+     *  syncing tab learned, and the latest write time any of them made or
+     *  saw. Without it a tab that never syncs itself would stamp its writes
+     *  with the device's own (possibly wrong) time, and lose to a write
+     *  that was in fact made earlier. */
+    private readSharedClock;
+    private saveClock;
     private readSeq;
     private bumpSeq;
     private writeWal;
