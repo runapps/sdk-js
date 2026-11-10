@@ -48,10 +48,15 @@ export class FilesRemote implements SyncRemote {
     return { status: "ok" as const, value: r.value, etag: r.etag ?? "" };
   }
 
-  async putJSON(path: string, value: unknown, cond: { ifMatch?: string; ifNoneMatch?: boolean }) {
+  async putJSON(path: string, value: unknown, cond: { ifMatch?: string; ifNoneMatch?: boolean }, opts?: { keepalive?: boolean }) {
+    const body = JSON.stringify(value);
+    // keepalive bodies are capped at 64 KB (all such requests together);
+    // a bigger shard goes as a normal write and may not outlive the page.
+    const keepalive = opts?.keepalive && new TextEncoder().encode(body).length < 60_000;
     try {
-      const obj = await this.files.put(path, JSON.stringify(value), {
+      const obj = await this.files.put(path, body, {
         contentType: "application/json",
+        ...(keepalive ? { keepalive: true } : {}),
         ...(cond.ifMatch ? { ifMatch: cond.ifMatch } : {}),
         ...(cond.ifNoneMatch ? { ifNoneMatch: true } : {}),
       });

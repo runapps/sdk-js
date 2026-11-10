@@ -33,7 +33,8 @@ class MemoryRemote {
     if (ifNoneMatch && ifNoneMatch === o.etag) return { status: "unchanged" };
     return { status: "ok", value: JSON.parse(o.body), etag: o.etag };
   }
-  async putJSON(path, value, cond) {
+  async putJSON(path, value, cond, opts) {
+    this.lastPutOpts = opts;
     if (this.beforePut) this.beforePut(path);
     const o = this.objects.get(path);
     if (cond.ifNoneMatch && o) return { status: "conflict" };
@@ -67,8 +68,7 @@ const req = (r) => new Promise((res, rej) => { r.onsuccess = () => res(r.result)
 const done = (tx) => new Promise((res, rej) => { tx.oncomplete = () => res(); tx.onabort = () => rej(tx.error); tx.onerror = () => rej(tx.error); });
 
 /** A "device": its own IDB factory, user and engine over a shared remote. */
-function device(remote, { user = "u1", options = {} } = {}) {
-  const factory = new IDBFactory();
+function device(remote, { user = "u1", options = {}, factory = new IDBFactory() } = {}) {
   globalThis.indexedDB = factory;
   const events = new SDKEvents();
   const states = [];
@@ -318,6 +318,9 @@ test("a lost conditional write is retried with the newer shard merged in", async
     const recs = remote.records("app", "notes");
     assert.ok(recs['"mine"'] && recs['"theirs"'], "both records survive the conflict");
     assert.equal(A.engine.status().pending, 0);
+    // The writer merged the other record into the shard; it must also
+    // reach the writer's own database, not only the server.
+    assert.deepEqual(await A.get(db, "notes", "theirs"), { id: "theirs", v: 9 });
     db.close();
   } finally {
     A.dispose();
@@ -547,4 +550,165 @@ test("a cached shard someone else changed since is re-read and merged", async ()
   } finally {
     A.dispose();
   }
+});
+
+/** Open "app" on a factory with no engine watching: what an app wrote
+ *  before the SDK loaded, or before it used sync at all. */
+async function writeBeforeSync(factory, fill) {
+  const db = await new Promise((resolve, reject) => {
+    const r = factory.open("app", 1);
+    r.onupgradeneeded = () => {
+      const d = r.result;
+      d.createObjectStore("notes", { keyPath: "id" });
+      d.createObjectStore("kv");
+      d.createObjectStore("cache", { keyPath: "id" });
+    };
+    r.onsuccess = () => resolve(r.result);
+    r.onerror = () => reject(r.error);
+  });
+  const tx = db.transaction(["notes", "kv"], "readwrite");
+  fill(tx.objectStore("notes"), tx.objectStore("kv"));
+  await done(tx);
+  db.close();
+}
+
+test("records written before sync saw them are pushed once; the cloud's own records win", async () => {
+  const remote = new MemoryRemote();
+  const A = device(remote);
+  const dbA = await A.openApp();
+  await A.write(dbA, "notes", (st) => st.put({ id: "shared", title: "cloud" }));
+  await A.engine.now();
+  dbA.close();
+  A.dispose();
+
+  const factory = new IDBFactory();
+  await writeBeforeSync(factory, (notes, kv) => {
+    notes.put({ id: "shared", title: "stale local" });
+    notes.put({ id: "local-only", title: "never synced" });
+    kv.put("v", "pref");
+  });
+  const B = device(remote, { factory });
+  try {
+    const db = await B.openApp();
+    await B.engine.now();
+    const recs = remote.records("app", "notes");
+    assert.equal(recs['"local-only"']?.v.title, "never synced", "the record only this device had is on the server");
+    assert.equal(recs['"local-only"'].t, 1, "stamped older than any real write");
+    assert.equal(recs['"shared"'].v.title, "cloud", "a record the cloud has is not overwritten");
+    assert.equal((await B.get(db, "notes", "shared")).title, "cloud");
+    assert.equal(remote.records("app", "kv")['"pref"']?.v, "v", "out-of-line keys too");
+    const puts = remote.puts;
+    await B.engine.now();
+    assert.equal(remote.puts, puts, "the scan runs once per store");
+    db.close();
+  } finally {
+    B.dispose();
+  }
+});
+
+test("an edit made elsewhere beats a record adopted from before sync", async () => {
+  const remote = new MemoryRemote();
+  const factory = new IDBFactory();
+  await writeBeforeSync(factory, (notes) => notes.put({ id: "n", title: "old" }));
+  const B = device(remote, { factory });
+  const dbB = await B.openApp();
+  await B.engine.now();
+  dbB.close();
+  B.dispose();
+  const A = device(remote);
+  try {
+    const db = await A.openApp();
+    assert.equal((await A.get(db, "notes", "n")).title, "old");
+    await A.write(db, "notes", (st) => st.put({ id: "n", title: "new" }));
+    await A.engine.now();
+    assert.equal(remote.records("app", "notes")['"n"'].v.title, "new");
+    db.close();
+  } finally {
+    A.dispose();
+  }
+});
+
+/** Run with a browser-like window/document and a Web Locks stub that
+ *  grants the sync lock after `grantAfterMs` (a page that just loaded). */
+async function inBrowser(fn, { grantAfterMs = 0 } = {}) {
+  const win = new EventTarget();
+  const doc = Object.assign(new EventTarget(), { visibilityState: "visible" });
+  const locks = {
+    request: (_name, cb) => new Promise((resolve) => setTimeout(() => resolve(cb()), grantAfterMs)),
+  };
+  globalThis.window = win;
+  globalThis.document = doc;
+  Object.defineProperty(globalThis.navigator, "locks", { value: locks, configurable: true });
+  try {
+    await fn({ win, doc });
+  } finally {
+    delete globalThis.window;
+    delete globalThis.document;
+    delete globalThis.navigator.locks;
+  }
+}
+
+test("another user's rows are gone before the app's first read", async () => {
+  const remote1 = new MemoryRemote();
+  const factory = new IDBFactory();
+  const A = device(remote1, { user: "u1", factory });
+  const db1 = await A.openApp();
+  await A.write(db1, "notes", (st) => st.put({ id: "secret", owner: "u1" }));
+  await A.engine.now();
+  db1.close();
+  A.dispose();
+
+  // u2 already has data in their own space.
+  const remote2 = new MemoryRemote();
+  const C = device(remote2, { user: "u2" });
+  const dbC = await C.openApp();
+  await C.write(dbC, "notes", (st) => st.put({ id: "mine", owner: "u2" }));
+  await C.engine.now();
+  dbC.close();
+  C.dispose();
+
+  // A page that just loaded: the app opens its database while the sync
+  // lock is still being granted.
+  await inBrowser(async () => {
+    const B = device(remote2, { user: "u2", factory });
+    try {
+      const db = await B.openApp(); // the first read
+      const ids = (await B.readAll(db, "notes")).map((n) => n.id).sort();
+      assert.deepEqual(ids, ["mine"], "u2's data is there and u1's row is not, even briefly");
+      await B.engine.now();
+      assert.equal(remote2.records("app", "notes")['"secret"'], undefined, "and u1's row never reaches u2");
+      db.close();
+    } finally {
+      B.dispose();
+    }
+  }, { grantAfterMs: 30 });
+});
+
+test("hiding the page pushes at once; leaving it asks the write to outlive the page", async () => {
+  await inBrowser(async ({ win, doc }) => {
+    const remote = new MemoryRemote();
+    const A = device(remote, { options: { pushDelayMs: 60_000 } });
+    try {
+      const db = await A.openApp();
+      await A.engine.now();
+      await A.write(db, "notes", (st) => st.put({ id: "edited" }));
+      await sleep(50);
+      assert.equal(remote.records("app", "notes")['"edited"'], undefined, "still gathering");
+      doc.visibilityState = "hidden";
+      doc.dispatchEvent(new Event("visibilitychange"));
+      await sleep(100);
+      assert.ok(remote.records("app", "notes")['"edited"'], "pushed when hidden");
+      assert.notEqual(remote.lastPutOpts?.keepalive, true, "a hidden page is alive: an ordinary write");
+
+      await A.write(db, "notes", (st) => st.put({ id: "last" }));
+      await sleep(20);
+      win.dispatchEvent(new Event("pagehide"));
+      await sleep(100);
+      assert.ok(remote.records("app", "notes")['"last"'], "pushed on pagehide");
+      assert.equal(remote.lastPutOpts?.keepalive, true, "with keepalive");
+      db.close();
+    } finally {
+      A.dispose();
+    }
+  });
 });

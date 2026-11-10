@@ -460,7 +460,11 @@ new RunApps({ sync: false });                       // off
 new RunApps({ sync: { databases: ["notes"], exclude: ["notes/thumbnails"] } });
 ```
 
-The app keeps using IndexedDB as before, directly or through Dexie, idb, idb-keyval and the like. The first `indexedDB.open` of a database on a new device waits (up to 5 s) for the user's data to arrive, so the first read already sees it. When another device's changes are applied, or another tab of the same browser writes to the database (IndexedDB itself has no event for that), `db:change` names the store and keys so the app can re-read; `source` is `"remote"` or `"tab"`:
+The app keeps using IndexedDB as before, directly or through Dexie, idb, idb-keyval and the like. The first `indexedDB.open` of a database on a new device waits (up to 5 s) for the user's data to arrive, so the first read already sees it.
+
+When it runs: on page load, when a database is opened, when the page is focused, shown again or back online, and every minute while it is visible; a write goes up about 2.5 s after it commits, and at once when the page is hidden or left (the write on `pagehide` uses `keepalive` so it can finish after the tab closes; one the browser drops waits in the device's log and goes up the next time the app is opened there). A reload never loses a write: pending changes are kept in IndexedDB and pushed first thing on the next load.
+
+Data that was in the app's database before sync saw it — written before the SDK loaded, or before the app turned sync on — is uploaded on the first sync, once per store: every record the cloud has no entry for goes up, stamped older than any real edit, and records the cloud already has keep the cloud's version. When another device's changes are applied, or another tab of the same browser writes to the database (IndexedDB itself has no event for that), `db:change` names the store and keys so the app can re-read; `source` is `"remote"` or `"tab"`:
 
 ```ts
 client.events.on("db:change", ({ db, store, keys, cleared }) => refresh(store));
@@ -474,7 +478,7 @@ Keep in mind:
 
 - **Use your own keys.** `crypto.randomUUID()` or any key the app chooses. `autoIncrement` keys are assigned per device, so two devices creating records offline collide and the later one wins.
 - **Leave out what is local.** Caches, decoded media and anything large or rebuildable: `exclude: ["app/cache"]` (a store) or `exclude: ["cache"]` (a whole database). Databases whose names start with `__runapps` are never synced.
-- **Another user signing in** on the same browser starts from their own data; the previous user's synced stores are cleared locally.
+- **Another user signing in** on the same browser starts from their own data; the previous user's synced stores are cleared locally before the app's first read.
 - The badge shows the state: blue pulse while syncing, amber when offline or retrying, and the popover lists pending changes and the last sync time.
 
 ## Models

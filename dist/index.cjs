@@ -296,7 +296,8 @@ var Transport = class {
         method: "PUT",
         headers,
         body,
-        signal: opts?.signal
+        signal: opts?.signal,
+        ...opts?.keepalive ? { keepalive: true } : {}
       };
     });
     if (!resp.ok) throw await this.parseError(resp);
@@ -2005,7 +2006,8 @@ var FilesService = class {
       // A Blob knows its type; with neither, the gateway goes by the path.
       contentType: opts?.contentType ?? blobType(body),
       headers: Object.keys(headers).length ? headers : void 0,
-      signal: opts?.signal
+      signal: opts?.signal,
+      ...opts?.keepalive ? { keepalive: true } : {}
     }));
   }
   /** Convenience: upload string content with sensible content-type. */
@@ -5457,6 +5459,8 @@ function mergeRecord(cur, inc, changed) {
 var TOMBSTONE_TTL_MS = 30 * 24 * 3600 * 1e3;
 var PUSH_CONCURRENCY = 6;
 var SHARD_CACHE_MAX = 256;
+var ADOPTED_TS = 1;
+var LEADER_WAIT_MS = 250;
 var MAX_PUSH_DELAY_MS = 1e4;
 var BACKOFF_MIN_MS = 5e3;
 var BACKOFF_MAX_MS = 5 * 6e4;
@@ -5504,6 +5508,13 @@ var SyncEngine = class {
     __publicField(this, "leader", true);
     __publicField(this, "pushTimer", null);
     __publicField(this, "pushDeadline", 0);
+    /** The page is going away (pagehide): writes ask to outlive it. */
+    __publicField(this, "leaving", false);
+    /** Databases the app opened in this page — the ones a scan for
+     *  records sync has never seen may open (see adoptLocal). */
+    __publicField(this, "openedHere", /* @__PURE__ */ new Set());
+    /** Called when this tab is granted the sync lock. */
+    __publicField(this, "leaderWaiters", []);
     __publicField(this, "pullTimer", null);
     __publicField(this, "backoffMs", 0);
     __publicField(this, "backoffUntil", 0);
@@ -5641,10 +5652,18 @@ var SyncEngine = class {
       }
     }
     this.schemas.set(name, schema);
+    this.openedHere.add(name);
     void this.log.setMeta({ ["schema:" + name]: Object.fromEntries(schema) }).catch(() => {
     });
-    if (!this.deps.userId() || this.paused || !this.leader) return;
-    await this.enqueue(() => this.pullDatabase(name)).catch(() => {
+    if (!this.deps.userId() || this.paused) return;
+    if (!this.leader && !await this.becomesLeader(LEADER_WAIT_MS)) return;
+    await this.enqueue(async () => {
+      const userId = this.deps.userId();
+      if (!userId) return;
+      await this.loadMeta();
+      await this.ensureOwner(userId);
+      await this.pullDatabase(name);
+    }).catch(() => {
     });
   }
   onDeleteDatabase(name) {
@@ -5668,9 +5687,18 @@ var SyncEngine = class {
       void this.schedule("online");
     });
     on(window, "focus", () => void this.schedule("focus"));
+    on(window, "pagehide", () => this.flush(true));
+    on(window, "pageshow", () => {
+      this.leaving = false;
+    });
     if (typeof document !== "undefined") {
       on(document, "visibilitychange", () => {
-        if (document.visibilityState === "visible") void this.schedule("visible");
+        if (document.visibilityState === "visible") {
+          this.leaving = false;
+          void this.schedule("visible");
+        } else {
+          this.flush(false);
+        }
         this.updatePullTimer();
       });
     }
@@ -5702,14 +5730,33 @@ var SyncEngine = class {
       this.leader = false;
       this.post({ type: "sync:request" });
       void locks.request("__runapps_sync__", () => {
-        this.leader = true;
+        this.becameLeader();
         void this.schedule("leader");
         return new Promise(() => {
         });
       }).catch(() => {
-        this.leader = true;
+        this.becameLeader();
       });
     }
+  }
+  becameLeader() {
+    this.leader = true;
+    for (const w of this.leaderWaiters.splice(0)) w();
+  }
+  /** Resolves true once this tab holds the sync lock, false after `ms`. */
+  becomesLeader(ms) {
+    if (this.leader) return Promise.resolve(true);
+    return new Promise((resolve) => {
+      const waiter = () => {
+        clearTimeout(timer);
+        resolve(true);
+      };
+      const timer = setTimeout(() => {
+        this.leaderWaiters = this.leaderWaiters.filter((w) => w !== waiter);
+        resolve(false);
+      }, ms);
+      this.leaderWaiters.push(waiter);
+    });
   }
   updatePullTimer() {
     const visible = typeof document === "undefined" || document.visibilityState !== "hidden";
@@ -5720,6 +5767,20 @@ var SyncEngine = class {
       clearInterval(this.pullTimer);
       this.pullTimer = null;
     }
+  }
+  /** Push what is waiting now (the page is being hidden or left). */
+  flush(leaving) {
+    if (this.disposed) return;
+    if (leaving) this.leaving = true;
+    if (!this.pushTimer && !this.state.pending) return;
+    if (this.pushTimer) clearTimeout(this.pushTimer);
+    this.pushTimer = null;
+    this.pushDeadline = 0;
+    if (!this.leader) {
+      this.post({ type: "sync:request" });
+      return;
+    }
+    void this.schedule(leaving ? "pagehide" : "hidden");
   }
   schedulePush() {
     if (this.disposed) return;
@@ -5833,6 +5894,7 @@ var SyncEngine = class {
       await this.logChain;
       await this.push();
       await this.pull();
+      if (await this.adoptLocal()) await this.push();
       this.backoffMs = 0;
       this.backoffUntil = 0;
       await this.refreshPending();
@@ -5859,10 +5921,8 @@ var SyncEngine = class {
       if (r.serverTime) this.clock.observe(r.serverTime, before, Date.now());
       const s = r.value;
       const shard = { v: 1, cleared: s?.cleared ?? 0, r: s?.r ?? {} };
-      this.etags.set(path, r.etag);
       return { shard, etag: r.etag };
     }
-    this.etags.delete(path);
     return { shard: { v: 1, cleared: 0, r: {} } };
   }
   // ── Push ─────────────────────────────────────────────────────────
@@ -5914,8 +5974,8 @@ var SyncEngine = class {
           const path = this.shardPath(db, store, n);
           const shardOps = byShard.get(n) ?? [];
           const encoded = await Promise.all(shardOps.map((op) => this.encodeOp(op)));
-          const etag = await this.writeShard(path, clearedAt, encoded);
-          await this.log.setMeta({ ["etag:" + path]: etag });
+          const { etag, applied } = await this.writeShard(path, clearedAt, encoded);
+          await this.log.setMeta({ ["etag:" + path]: applied ? etag : void 0 });
           await settle(idsOf(shardOps));
         })
       );
@@ -5934,6 +5994,7 @@ var SyncEngine = class {
    *  try starts from the cached copy, or from nothing when the last
    *  listing showed no such shard — no read either way. */
   async writeShard(path, clearedAt, ops) {
+    const appliedEtag = this.etags.get(path);
     for (let attempt = 0; attempt < 5; attempt++) {
       const cached = attempt === 0 ? this.shardCache.get(path) : void 0;
       const { shard, etag } = cached ? { shard: copyShard(cached.shard), etag: cached.etag } : attempt === 0 && this.knownAbsent(path) ? { shard: { v: 1, cleared: 0, r: {} }, etag: void 0 } : await this.readShard(path);
@@ -5953,13 +6014,15 @@ var SyncEngine = class {
         if (rec.d && now - rec.t > TOMBSTONE_TTL_MS) delete shard.r[kid];
       }
       const before = Date.now();
-      const r = await this.deps.remote.putJSON(path, shard, etag ? { ifMatch: etag } : { ifNoneMatch: true });
+      const r = await this.deps.remote.putJSON(path, shard, etag ? { ifMatch: etag } : { ifNoneMatch: true }, this.leaving ? { keepalive: true } : void 0);
       if (r.status === "ok") {
         if (r.serverTime) this.clock.observe(r.serverTime, before, Date.now());
-        this.etags.set(path, r.etag);
+        const applied = etag === appliedEtag;
+        if (applied) this.etags.set(path, r.etag);
+        else this.etags.delete(path);
         this.cacheShard(path, r.etag, shard);
         this.listedPaths.add(path);
-        return r.etag;
+        return { etag: r.etag, applied };
       }
       this.etags.delete(path);
       this.shardCache.delete(path);
@@ -5994,6 +6057,83 @@ var SyncEngine = class {
     const ref = `${this.options.prefix}/_blobs/${hex}`;
     await this.deps.remote.putBlob(ref, blob);
     return { ref, type: blob.type, size: blob.size };
+  }
+  // ── Records sync has never seen ──────────────────────────────────
+  /**
+   * Records already in the app's database before sync saw them — written
+   * before the SDK loaded, or before the app used sync at all — are in no
+   * log, so nothing would ever push them and they would stay on this
+   * device. Once per store, every local record the cloud has no entry for
+   * (not even a deletion) goes into the log stamped older than any real
+   * write: the ordinary push adds it, and an edit made elsewhere still
+   * wins. Records the cloud has are left alone (the pull has applied the
+   * cloud's version), so nothing already there is uploaded again.
+   * Runs after the pull and after ensureOwner, which has emptied the
+   * stores if another user's rows were here. Returns whether it logged
+   * anything.
+   */
+  async adoptLocal() {
+    const done2 = new Set((await this.log.metaWithPrefix("adopted:")).keys());
+    let pendingKids = null;
+    let added = false;
+    for (const db of this.openedHere) {
+      const schema = this.schemas.get(db);
+      if (!schema) continue;
+      for (const store of schema.keys()) {
+        const flag = `adopted:${db}/${store}`;
+        if (done2.has(flag) || this.storeExcluded(db, store)) continue;
+        if (!pendingKids) {
+          pendingKids = new Set((await this.log.pending()).map((op) => op.db + "\0" + op.store + "\0" + op.kid));
+        }
+        const known = await this.cloudKeys(db, store);
+        const ops = [];
+        const seen = pendingKids;
+        await this.withStore(db, store, "readonly", (st) => {
+          const cur = st.openCursor();
+          cur.onsuccess = () => {
+            const c = cur.result;
+            if (!c) return;
+            const kid = keyId(c.primaryKey);
+            if (!known.has(kid) && !seen.has(db + "\0" + store + "\0" + kid)) {
+              ops.push({ db, store, kind: "put", kid, key: encodeKey(c.primaryKey), value: c.value, ts: ADOPTED_TS });
+            }
+            c.continue();
+          };
+        });
+        if (ops.length > 0) {
+          this.enqueueLog(ops);
+          added = true;
+        }
+        await this.logChain;
+        await this.log.setMeta({ [flag]: Date.now() });
+      }
+    }
+    return added;
+  }
+  /** Every key the cloud copy of a store has an entry for, deletions
+   *  included. Reads the shards the cache does not hold as they are now;
+   *  what it reads is cached for the push but not marked applied, so the
+   *  next pull still applies it. */
+  async cloudKeys(db, store) {
+    const keys = /* @__PURE__ */ new Set();
+    for (let n = 0; n < this.options.shards; n++) {
+      const path = this.shardPath(db, store, n);
+      if (this.knownAbsent(path)) continue;
+      const cached = this.shardCache.get(path);
+      let shard;
+      if (cached && cached.etag === this.etags.get(path)) {
+        shard = cached.shard;
+      } else {
+        const r = await this.deps.remote.getJSON(path);
+        if (r.status === "ok") {
+          const s = r.value;
+          shard = { v: 1, cleared: s?.cleared ?? 0, r: s?.r ?? {} };
+          if (r.etag === this.etags.get(path)) this.cacheShard(path, r.etag, copyShard(shard));
+        }
+      }
+      for (const kid of Object.keys(shard?.r ?? {})) keys.add(kid);
+    }
+    return keys;
   }
   // ── Pull ─────────────────────────────────────────────────────────
   async pull() {
@@ -6193,10 +6333,13 @@ var FilesRemote = class {
     if (r.value === void 0) return { status: "missing" };
     return { status: "ok", value: r.value, etag: r.etag ?? "" };
   }
-  async putJSON(path, value, cond) {
+  async putJSON(path, value, cond, opts) {
+    const body = JSON.stringify(value);
+    const keepalive = opts?.keepalive && new TextEncoder().encode(body).length < 6e4;
     try {
-      const obj = await this.files.put(path, JSON.stringify(value), {
+      const obj = await this.files.put(path, body, {
         contentType: "application/json",
+        ...keepalive ? { keepalive: true } : {},
         ...cond.ifMatch ? { ifMatch: cond.ifMatch } : {},
         ...cond.ifNoneMatch ? { ifNoneMatch: true } : {}
       });

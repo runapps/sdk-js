@@ -68,9 +68,12 @@ export interface SyncRemote {
     } | {
         status: "unchanged";
     }>;
+    /** `keepalive`: the page is going away; let a small write finish after it. */
     putJSON(path: string, value: unknown, cond: {
         ifMatch?: string;
         ifNoneMatch?: boolean;
+    }, opts?: {
+        keepalive?: boolean;
     }): Promise<{
         status: "ok";
         etag: string;
@@ -105,6 +108,13 @@ export declare class SyncEngine {
     private leader;
     private pushTimer;
     private pushDeadline;
+    /** The page is going away (pagehide): writes ask to outlive it. */
+    private leaving;
+    /** Databases the app opened in this page — the ones a scan for
+     *  records sync has never seen may open (see adoptLocal). */
+    private readonly openedHere;
+    /** Called when this tab is granted the sync lock. */
+    private leaderWaiters;
     private pullTimer;
     private backoffMs;
     private backoffUntil;
@@ -127,7 +137,12 @@ export declare class SyncEngine {
     private onOpen;
     private onDeleteDatabase;
     private attachBrowserTriggers;
+    private becameLeader;
+    /** Resolves true once this tab holds the sync lock, false after `ms`. */
+    private becomesLeader;
     private updatePullTimer;
+    /** Push what is waiting now (the page is being hidden or left). */
+    private flush;
     private schedulePush;
     private schedule;
     private enqueue;
@@ -156,6 +171,25 @@ export declare class SyncEngine {
     /** Remember what a listing of `prefix` showed (see listedPaths). */
     private rememberListing;
     private storeBlob;
+    /**
+     * Records already in the app's database before sync saw them — written
+     * before the SDK loaded, or before the app used sync at all — are in no
+     * log, so nothing would ever push them and they would stay on this
+     * device. Once per store, every local record the cloud has no entry for
+     * (not even a deletion) goes into the log stamped older than any real
+     * write: the ordinary push adds it, and an edit made elsewhere still
+     * wins. Records the cloud has are left alone (the pull has applied the
+     * cloud's version), so nothing already there is uploaded again.
+     * Runs after the pull and after ensureOwner, which has emptied the
+     * stores if another user's rows were here. Returns whether it logged
+     * anything.
+     */
+    private adoptLocal;
+    /** Every key the cloud copy of a store has an entry for, deletions
+     *  included. Reads the shards the cache does not hold as they are now;
+     *  what it reads is cached for the push but not marked applied, so the
+     *  next pull still applies it. */
+    private cloudKeys;
     private pull;
     private pullDatabase;
     private applyListing;

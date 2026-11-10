@@ -85,7 +85,8 @@ export interface SyncDeps {
 export interface SyncRemote {
   list(prefix: string): Promise<{ path: string; etag: string }[]>;
   getJSON(path: string, ifNoneMatch?: string): Promise<{ status: "ok"; value: unknown; etag: string; serverTime?: number } | { status: "missing" } | { status: "unchanged" }>;
-  putJSON(path: string, value: unknown, cond: { ifMatch?: string; ifNoneMatch?: boolean }): Promise<{ status: "ok"; etag: string; serverTime?: number } | { status: "conflict" }>;
+  /** `keepalive`: the page is going away; let a small write finish after it. */
+  putJSON(path: string, value: unknown, cond: { ifMatch?: string; ifNoneMatch?: boolean }, opts?: { keepalive?: boolean }): Promise<{ status: "ok"; etag: string; serverTime?: number } | { status: "conflict" }>;
   putBlob(path: string, blob: Blob): Promise<void>;
   getBlob(path: string): Promise<Blob>;
 }
@@ -182,6 +183,14 @@ const TOMBSTONE_TTL_MS = 30 * 24 * 3600 * 1000;
 const PUSH_CONCURRENCY = 6;
 /** Shard copies kept, with their etags, so a write needs no read first. */
 const SHARD_CACHE_MAX = 256;
+/** The write time given to a record that was in the app's database
+ *  before sync saw it: older than any real write, so an edit made
+ *  anywhere else wins over it. */
+const ADOPTED_TS = 1;
+/** How long a database open waits for this tab to be granted the sync
+ *  lock when the page has just loaded (another tab holding it: no wait
+ *  beyond this). */
+const LEADER_WAIT_MS = 250;
 const MAX_PUSH_DELAY_MS = 10_000;
 const BACKOFF_MIN_MS = 5_000;
 const BACKOFF_MAX_MS = 5 * 60_000;
@@ -230,6 +239,13 @@ export class SyncEngine {
   private leader = true;
   private pushTimer: ReturnType<typeof setTimeout> | null = null;
   private pushDeadline = 0;
+  /** The page is going away (pagehide): writes ask to outlive it. */
+  private leaving = false;
+  /** Databases the app opened in this page — the ones a scan for
+   *  records sync has never seen may open (see adoptLocal). */
+  private readonly openedHere = new Set<string>();
+  /** Called when this tab is granted the sync lock. */
+  private leaderWaiters: (() => void)[] = [];
   private pullTimer: ReturnType<typeof setInterval> | null = null;
   private backoffMs = 0;
   private backoffUntil = 0;
@@ -390,9 +406,23 @@ export class SyncEngine {
       }
     }
     this.schemas.set(name, schema);
+    this.openedHere.add(name);
     void this.log.setMeta({ ["schema:" + name]: Object.fromEntries(schema) }).catch(() => {});
-    if (!this.deps.userId() || this.paused || !this.leader) return;
-    await this.enqueue(() => this.pullDatabase(name)).catch(() => {});
+    if (!this.deps.userId() || this.paused) return;
+    // Right after the page loads the sync lock is still being asked for:
+    // wait a moment for it, or the app's first read goes ahead without
+    // the pull (and, after a change of user, with the last user's rows).
+    // When another tab holds it, that tab syncs and this one reads local.
+    if (!this.leader && !(await this.becomesLeader(LEADER_WAIT_MS))) return;
+    await this.enqueue(async () => {
+      const userId = this.deps.userId();
+      if (!userId) return;
+      // Another user's rows must be gone before the app's first read,
+      // not only after the first full sync.
+      await this.loadMeta();
+      await this.ensureOwner(userId);
+      await this.pullDatabase(name);
+    }).catch(() => {});
   }
 
   private onDeleteDatabase(name: string): void {
@@ -417,9 +447,24 @@ export class SyncEngine {
       void this.schedule("online");
     });
     on(window, "focus", () => void this.schedule("focus"));
+    // Leaving: push now instead of after the gathering delay, so a user
+    // who edits and switches away or closes the tab has their change on
+    // the server, not only in this device's log until the app is opened
+    // here again. Hidden pages are alive (tab switch, phone home button):
+    // an ordinary push. pagehide is the page going away: writes ask to
+    // outlive it (keepalive); one the browser drops stays in the log.
+    on(window, "pagehide", () => this.flush(true));
+    on(window, "pageshow", () => {
+      this.leaving = false;
+    });
     if (typeof document !== "undefined") {
       on(document, "visibilitychange", () => {
-        if (document.visibilityState === "visible") void this.schedule("visible");
+        if (document.visibilityState === "visible") {
+          this.leaving = false;
+          void this.schedule("visible");
+        } else {
+          this.flush(false);
+        }
         this.updatePullTimer();
       });
     }
@@ -464,14 +509,35 @@ export class SyncEngine {
       this.post({ type: "sync:request" });
       void locks
         .request("__runapps_sync__", () => {
-          this.leader = true;
+          this.becameLeader();
           void this.schedule("leader");
           return new Promise<void>(() => {}); // hold until the tab dies
         })
         .catch(() => {
-          this.leader = true;
+          this.becameLeader();
         });
     }
+  }
+
+  private becameLeader(): void {
+    this.leader = true;
+    for (const w of this.leaderWaiters.splice(0)) w();
+  }
+
+  /** Resolves true once this tab holds the sync lock, false after `ms`. */
+  private becomesLeader(ms: number): Promise<boolean> {
+    if (this.leader) return Promise.resolve(true);
+    return new Promise((resolve) => {
+      const waiter = () => {
+        clearTimeout(timer);
+        resolve(true);
+      };
+      const timer = setTimeout(() => {
+        this.leaderWaiters = this.leaderWaiters.filter((w) => w !== waiter);
+        resolve(false);
+      }, ms);
+      this.leaderWaiters.push(waiter);
+    });
   }
 
   private updatePullTimer(): void {
@@ -483,6 +549,21 @@ export class SyncEngine {
       clearInterval(this.pullTimer);
       this.pullTimer = null;
     }
+  }
+
+  /** Push what is waiting now (the page is being hidden or left). */
+  private flush(leaving: boolean): void {
+    if (this.disposed) return;
+    if (leaving) this.leaving = true;
+    if (!this.pushTimer && !this.state.pending) return;
+    if (this.pushTimer) clearTimeout(this.pushTimer);
+    this.pushTimer = null;
+    this.pushDeadline = 0;
+    if (!this.leader) {
+      this.post({ type: "sync:request" });
+      return;
+    }
+    void this.schedule(leaving ? "pagehide" : "hidden");
   }
 
   private schedulePush(): void {
@@ -615,6 +696,7 @@ export class SyncEngine {
       await this.logChain;
       await this.push();
       await this.pull();
+      if (await this.adoptLocal()) await this.push();
       this.backoffMs = 0;
       this.backoffUntil = 0;
       await this.refreshPending();
@@ -645,10 +727,10 @@ export class SyncEngine {
       if (r.serverTime) this.clock.observe(r.serverTime, before, Date.now());
       const s = r.value as Partial<Shard> | null;
       const shard: Shard = { v: 1, cleared: s?.cleared ?? 0, r: s?.r ?? {} };
-      this.etags.set(path, r.etag);
+      // Read to merge into, not applied: `etags` (what this device has
+      // applied) is left as it was, so the next pull still applies it.
       return { shard, etag: r.etag };
     }
-    this.etags.delete(path);
     return { shard: { v: 1, cleared: 0, r: {} } };
   }
 
@@ -708,8 +790,8 @@ export class SyncEngine {
           const path = this.shardPath(db, store, n);
           const shardOps = byShard.get(n) ?? [];
           const encoded = await Promise.all(shardOps.map((op) => this.encodeOp(op)));
-          const etag = await this.writeShard(path, clearedAt, encoded);
-          await this.log.setMeta({ ["etag:" + path]: etag });
+          const { etag, applied } = await this.writeShard(path, clearedAt, encoded);
+          await this.log.setMeta({ ["etag:" + path]: applied ? etag : undefined });
           await settle(idsOf(shardOps));
         }),
       );
@@ -730,7 +812,12 @@ export class SyncEngine {
   /** Merge ops into one shard and write it; retried on a 412. The first
    *  try starts from the cached copy, or from nothing when the last
    *  listing showed no such shard — no read either way. */
-  private async writeShard(path: string, clearedAt: number, ops: ShardOp[]): Promise<string> {
+  private async writeShard(path: string, clearedAt: number, ops: ShardOp[]): Promise<{ etag: string; applied: boolean }> {
+    // The version this device has applied. A write merged into any other
+    // version (another device wrote in between) carries records this
+    // device has not applied yet: it is left unmarked, so the pull that
+    // follows applies it, instead of taking the new ETag as seen.
+    const appliedEtag = this.etags.get(path);
     for (let attempt = 0; attempt < 5; attempt++) {
       const cached = attempt === 0 ? this.shardCache.get(path) : undefined;
       const { shard, etag } = cached
@@ -755,13 +842,15 @@ export class SyncEngine {
         if (rec.d && now - rec.t > TOMBSTONE_TTL_MS) delete shard.r[kid];
       }
       const before = Date.now();
-      const r = await this.deps.remote.putJSON(path, shard, etag ? { ifMatch: etag } : { ifNoneMatch: true });
+      const r = await this.deps.remote.putJSON(path, shard, etag ? { ifMatch: etag } : { ifNoneMatch: true }, this.leaving ? { keepalive: true } : undefined);
       if (r.status === "ok") {
         if (r.serverTime) this.clock.observe(r.serverTime, before, Date.now());
-        this.etags.set(path, r.etag);
+        const applied = etag === appliedEtag;
+        if (applied) this.etags.set(path, r.etag);
+        else this.etags.delete(path);
         this.cacheShard(path, r.etag, shard);
         this.listedPaths.add(path);
-        return r.etag;
+        return { etag: r.etag, applied };
       }
       this.etags.delete(path);
       this.shardCache.delete(path);
@@ -800,6 +889,88 @@ export class SyncEngine {
     const ref = `${this.options.prefix}/_blobs/${hex}`;
     await this.deps.remote.putBlob(ref, blob);
     return { ref, type: blob.type, size: blob.size };
+  }
+
+  // ── Records sync has never seen ──────────────────────────────────
+
+  /**
+   * Records already in the app's database before sync saw them — written
+   * before the SDK loaded, or before the app used sync at all — are in no
+   * log, so nothing would ever push them and they would stay on this
+   * device. Once per store, every local record the cloud has no entry for
+   * (not even a deletion) goes into the log stamped older than any real
+   * write: the ordinary push adds it, and an edit made elsewhere still
+   * wins. Records the cloud has are left alone (the pull has applied the
+   * cloud's version), so nothing already there is uploaded again.
+   * Runs after the pull and after ensureOwner, which has emptied the
+   * stores if another user's rows were here. Returns whether it logged
+   * anything.
+   */
+  private async adoptLocal(): Promise<boolean> {
+    const done = new Set((await this.log.metaWithPrefix("adopted:")).keys());
+    let pendingKids: Set<string> | null = null;
+    let added = false;
+    for (const db of this.openedHere) {
+      const schema = this.schemas.get(db);
+      if (!schema) continue;
+      for (const store of schema.keys()) {
+        const flag = `adopted:${db}/${store}`;
+        if (done.has(flag) || this.storeExcluded(db, store)) continue;
+        if (!pendingKids) {
+          pendingKids = new Set((await this.log.pending()).map((op) => op.db + "\u0000" + op.store + "\u0000" + op.kid));
+        }
+        const known = await this.cloudKeys(db, store);
+        const ops: LoggedOp[] = [];
+        const seen = pendingKids;
+        await this.withStore(db, store, "readonly", (st) => {
+          const cur = st.openCursor();
+          cur.onsuccess = () => {
+            const c = cur.result;
+            if (!c) return;
+            const kid = keyId(c.primaryKey);
+            if (!known.has(kid) && !seen.has(db + "\u0000" + store + "\u0000" + kid)) {
+              ops.push({ db, store, kind: "put", kid, key: encodeKey(c.primaryKey), value: c.value, ts: ADOPTED_TS });
+            }
+            c.continue();
+          };
+        });
+        if (ops.length > 0) {
+          this.enqueueLog(ops);
+          added = true;
+        }
+        await this.logChain;
+        await this.log.setMeta({ [flag]: Date.now() });
+      }
+    }
+    return added;
+  }
+
+  /** Every key the cloud copy of a store has an entry for, deletions
+   *  included. Reads the shards the cache does not hold as they are now;
+   *  what it reads is cached for the push but not marked applied, so the
+   *  next pull still applies it. */
+  private async cloudKeys(db: string, store: string): Promise<Set<string>> {
+    const keys = new Set<string>();
+    for (let n = 0; n < this.options.shards; n++) {
+      const path = this.shardPath(db, store, n);
+      if (this.knownAbsent(path)) continue;
+      const cached = this.shardCache.get(path);
+      let shard: Shard | undefined;
+      if (cached && cached.etag === this.etags.get(path)) {
+        shard = cached.shard;
+      } else {
+        const r = await this.deps.remote.getJSON(path);
+        if (r.status === "ok") {
+          const s = r.value as Partial<Shard> | null;
+          shard = { v: 1, cleared: s?.cleared ?? 0, r: s?.r ?? {} };
+          // Cache it only as the version this device has applied: a push
+          // from a newer, unapplied copy would mark it applied unseen.
+          if (r.etag === this.etags.get(path)) this.cacheShard(path, r.etag, copyShard(shard));
+        }
+      }
+      for (const kid of Object.keys(shard?.r ?? {})) keys.add(kid);
+    }
+    return keys;
   }
 
   // ── Pull ─────────────────────────────────────────────────────────

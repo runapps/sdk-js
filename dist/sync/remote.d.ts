@@ -31,6 +31,8 @@ export declare class FilesRemote implements SyncRemote {
     putJSON(path: string, value: unknown, cond: {
         ifMatch?: string;
         ifNoneMatch?: boolean;
+    }, opts?: {
+        keepalive?: boolean;
     }): Promise<{
         status: "ok";
         etag: string;

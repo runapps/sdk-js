@@ -214,6 +214,7 @@ export class Transport {
                 headers,
                 body,
                 signal: opts?.signal,
+                ...(opts?.keepalive ? { keepalive: true } : {}),
             };
         });
         if (!resp.ok)

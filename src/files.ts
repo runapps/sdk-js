@@ -37,6 +37,13 @@ export interface PutOptions {
    * of silently overwriting their version; re-read, merge, put again.
    */
   ifMatch?: string;
+  /**
+   * Let the write finish after the page goes away (fetch `keepalive`):
+   * for a save made on `pagehide`. Browsers cap such bodies at 64 KB in
+   * all, and some refuse them on cross-origin requests, so keep it for
+   * small, last-moment writes.
+   */
+  keepalive?: boolean;
   signal?: AbortSignal;
 }
 
@@ -214,6 +221,7 @@ export class FilesService {
       contentType: opts?.contentType ?? blobType(body),
       headers: Object.keys(headers).length ? headers : undefined,
       signal: opts?.signal,
+      ...(opts?.keepalive ? { keepalive: true } : {}),
     }));
   }
 

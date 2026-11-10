@@ -125,6 +125,7 @@ export declare class Transport {
         headers?: Record<string, string>;
         signal?: AbortSignal;
         parse?: "json" | "none";
+        keepalive?: boolean;
     }): Promise<T>;
     /** DELETE path; parse JSON response (or no body). */
     deletePath<T>(path: string, init?: {

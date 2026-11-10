@@ -272,6 +272,7 @@ export class Transport {
       headers?: Record<string, string>;
       signal?: AbortSignal;
       parse?: "json" | "none";
+      keepalive?: boolean;
     },
   ): Promise<T> {
     const resp = await this.fetchWithAuthRetry(path, async () => {
@@ -292,6 +293,7 @@ export class Transport {
         headers,
         body,
         signal: opts?.signal,
+        ...(opts?.keepalive ? { keepalive: true } : {}),
       };
     });
     if (!resp.ok) throw await this.parseError(resp);

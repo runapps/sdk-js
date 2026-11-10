@@ -117,6 +117,7 @@ export class FilesService {
             contentType: opts?.contentType ?? blobType(body),
             headers: Object.keys(headers).length ? headers : undefined,
             signal: opts?.signal,
+            ...(opts?.keepalive ? { keepalive: true } : {}),
         }));
     }
     /** Convenience: upload string content with sensible content-type. */
