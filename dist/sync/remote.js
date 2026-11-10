@@ -27,15 +27,16 @@ export class FilesRemote {
             r = await this.files.readJSON(path, ifNoneMatch ? { ifNoneMatch } : undefined);
         }
         catch (e) {
-            // A shard that is not JSON (a write cut short before the gateway
-            // checked lengths) would stall every pull.  Hand it back as an
-            // empty shard *with its ETag*, so the next push overwrites it with
-            // If-Match instead of trying to create it (409 → re-pull → 409 …).
+            // A file that is not JSON (a write cut short before the gateway
+            // checked lengths). Say so, with its ETag: the engine neither
+            // takes it for an empty shard (that would read as "every record
+            // in it was deleted") nor stalls on it, and the next write replaces
+            // it with If-Match.
             if (e instanceof SyntaxError) {
-                console.warn("[runapps sync] unreadable shard, will be rewritten", path);
+                console.warn("[runapps sync] unreadable file, will be rewritten", path);
                 try {
                     const st = await this.files.stat(path);
-                    return { status: "ok", value: null, etag: st.etag ?? "", serverTime: st.last_modified ? Date.parse(st.last_modified) : undefined };
+                    return { status: "corrupt", etag: st.etag ?? "" };
                 }
                 catch {
                     return { status: "missing" };
@@ -43,11 +44,12 @@ export class FilesRemote {
             }
             throw e;
         }
+        const st = r.serverTime !== undefined ? { serverTime: r.serverTime } : {};
         if (r.notModified)
-            return { status: "unchanged" };
+            return { status: "unchanged", ...st };
         if (r.value === undefined)
-            return { status: "missing" };
-        return { status: "ok", value: r.value, etag: r.etag ?? "" };
+            return { status: "missing", ...st };
+        return { status: "ok", value: r.value, etag: r.etag ?? "", ...st };
     }
     async putJSON(path, value, cond, opts) {
         const body = JSON.stringify(value);
@@ -68,6 +70,15 @@ export class FilesRemote {
             if (code === 412 || code === 409)
                 return { status: "conflict" };
             throw e;
+        }
+    }
+    async remove(path) {
+        try {
+            await this.files.del(path);
+        }
+        catch (e) {
+            if (e.statusCode !== 404)
+                throw e;
         }
     }
     async putBlob(path, blob) {

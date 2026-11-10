@@ -145,12 +145,13 @@ export class FilesService {
         return this.run("files.read", () => this.readRaw(path, init));
     }
     async readRaw(path, init) {
-        const { data, contentType, etag, notModified } = await this.transport.getRaw(pathToURL(await this.base(), path), init);
+        const { data, contentType, etag, notModified, serverTime } = await this.transport.getRaw(pathToURL(await this.base(), path), init);
         return {
             blob: new Blob([new Uint8Array(data)], { type: contentType || "application/octet-stream" }),
             contentType,
             etag,
             ...(notModified ? { notModified: true } : {}),
+            ...(serverTime !== undefined ? { serverTime } : {}),
         };
     }
     /**
@@ -161,7 +162,7 @@ export class FilesService {
     async readJSON(path, init) {
         let r;
         try {
-            r = await this.read(path, init);
+            r = await this.run("files.read", () => this.readRaw(path, init));
         }
         catch (e) {
             if (e?.statusCode === 404 ||
@@ -170,9 +171,10 @@ export class FilesService {
             }
             throw e;
         }
+        const st = r.serverTime !== undefined ? { serverTime: r.serverTime } : {};
         if (r.notModified)
-            return { value: undefined, etag: r.etag, notModified: true };
-        return { value: JSON.parse(await r.blob.text()), etag: r.etag };
+            return { value: undefined, etag: r.etag, notModified: true, ...st };
+        return { value: JSON.parse(await r.blob.text()), etag: r.etag, ...st };
     }
     /** Stat: HEAD-only object metadata. */
     async stat(path, init) {

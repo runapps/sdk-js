@@ -30,10 +30,13 @@ export declare function hash32(s: string): number;
  * Blob objects count as a change). Used to find which fields a write
  * touched.
  */
-export declare function deepEqual(a: unknown, b: unknown): boolean;
+export declare function deepEqual(a: unknown, b: unknown, depth?: number): boolean;
 /** The fields of `value` that differ from `prior` (added, changed or
  *  removed). `undefined` when there is no prior: everything is new. */
 export declare function changedFields(prior: unknown, value: unknown): string[] | undefined;
+/** Write `key` into `value` at an inline keyPath (a.b.c), as IndexedDB
+ *  does for a generated key. False when the path cannot hold it. */
+export declare function injectKey(value: unknown, keyPath: string, key: IDBValidKey): boolean;
 /** Read an inline key out of a value by IndexedDB keyPath rules. */
 export declare function extractKey(value: unknown, keyPath: string | string[] | null): IDBValidKey | undefined;
 //# sourceMappingURL=codec.d.ts.map

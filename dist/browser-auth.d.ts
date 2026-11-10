@@ -98,6 +98,7 @@ export declare class BrowserAuth {
     private popupOpenedAt;
     private userInfo;
     private listeners;
+    private identityListeners;
     private parentHandshake;
     private signingIn;
     constructor(opts?: BrowserAuthOptions);
@@ -105,6 +106,9 @@ export declare class BrowserAuth {
     getToken: () => Promise<string>;
     /** Subscribe to (re)acquisition events. Returns an unsubscribe fn. */
     onTokenChange(handler: (token: string) => void): () => void;
+    /** @internal Subscribe to any change of who is signed in, including
+     *  a sign-in or sign-out in another tab. */
+    onIdentityChange(handler: () => void): () => void;
     /** Currently-authenticated user, or null. */
     get user(): BrowserUser | null;
     /**
@@ -188,6 +192,9 @@ export declare class BrowserAuth {
     private tokenIsFresh;
     private inIframe;
     private setToken;
+    /** Tell the subscribers: onTokenChange for a token acquired,
+     *  onIdentityChange for any change (also signing out in another tab). */
+    private notifyTokenChange;
     private savePersisted;
     private loadPersisted;
     private clearPersisted;

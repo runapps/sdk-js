@@ -173,12 +173,14 @@ export declare class RunApps {
     readonly auth: BrowserAuth | null;
     /**
      * RunApps Sync (see `ClientOptions.sync`), or null when it
-     * is off. `status()` gives the state the badge shows; `now()` pushes
+     * is off. `status()` gives the state the badge shows; `ready()`
+     * resolves once the first sync has run; `now()` pushes
      * and pulls immediately; `client.events.on("db:change", …)` tells the
      * app which store received remote changes so it can re-read.
      */
     readonly sync: {
         status(): SyncState;
+        ready(): Promise<void>;
         now(): Promise<void>;
         pause(): void;
         resume(): void;

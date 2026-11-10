@@ -8,25 +8,33 @@ export declare class FilesRemote implements SyncRemote {
         etag: string;
     }[]>;
     getJSON(path: string, ifNoneMatch?: string): Promise<{
-        status: "ok";
-        value: null;
+        status: "corrupt";
         etag: string;
-        serverTime: number | undefined;
     } | {
         status: "missing";
-        value?: undefined;
         etag?: undefined;
-        serverTime?: undefined;
     } | {
+        serverTime: number;
         status: "unchanged";
-        value?: undefined;
         etag?: undefined;
-        serverTime?: undefined;
     } | {
+        serverTime?: undefined;
+        status: "unchanged";
+        etag?: undefined;
+    } | {
+        serverTime: number;
+        status: "missing";
+        etag?: undefined;
+    } | {
+        serverTime: number;
         status: "ok";
         value: {} | null;
         etag: string;
+    } | {
         serverTime?: undefined;
+        status: "ok";
+        value: {} | null;
+        etag: string;
     }>;
     putJSON(path: string, value: unknown, cond: {
         ifMatch?: string;
@@ -42,6 +50,7 @@ export declare class FilesRemote implements SyncRemote {
         etag?: undefined;
         serverTime?: undefined;
     }>;
+    remove(path: string): Promise<void>;
     putBlob(path: string, blob: Blob): Promise<void>;
     getBlob(path: string): Promise<Blob>;
 }

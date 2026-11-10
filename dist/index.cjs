@@ -2035,12 +2035,13 @@ var FilesService = class {
     return this.run("files.read", () => this.readRaw(path, init));
   }
   async readRaw(path, init) {
-    const { data, contentType, etag, notModified } = await this.transport.getRaw(pathToURL(await this.base(), path), init);
+    const { data, contentType, etag, notModified, serverTime } = await this.transport.getRaw(pathToURL(await this.base(), path), init);
     return {
       blob: new Blob([new Uint8Array(data)], { type: contentType || "application/octet-stream" }),
       contentType,
       etag,
-      ...notModified ? { notModified: true } : {}
+      ...notModified ? { notModified: true } : {},
+      ...serverTime !== void 0 ? { serverTime } : {}
     };
   }
   /**
@@ -2051,15 +2052,16 @@ var FilesService = class {
   async readJSON(path, init) {
     let r;
     try {
-      r = await this.read(path, init);
+      r = await this.run("files.read", () => this.readRaw(path, init));
     } catch (e) {
       if (e?.statusCode === 404 || e?.status === 404) {
         return { value: void 0, etag: void 0 };
       }
       throw e;
     }
-    if (r.notModified) return { value: void 0, etag: r.etag, notModified: true };
-    return { value: JSON.parse(await r.blob.text()), etag: r.etag };
+    const st = r.serverTime !== void 0 ? { serverTime: r.serverTime } : {};
+    if (r.notModified) return { value: void 0, etag: r.etag, notModified: true, ...st };
+    return { value: JSON.parse(await r.blob.text()), etag: r.etag, ...st };
   }
   /** Stat: HEAD-only object metadata. */
   async stat(path, init) {
@@ -3214,6 +3216,17 @@ var BIN_CTORS = {
   BigUint64Array: (b) => new BigUint64Array(b),
   DataView: (b) => new DataView(b)
 };
+var F16 = globalThis.Float16Array;
+if (F16) BIN_CTORS.Float16Array = (b) => new F16(b);
+var ERROR_CTORS = {
+  Error,
+  EvalError,
+  RangeError,
+  ReferenceError,
+  SyntaxError,
+  TypeError,
+  URIError
+};
 function bytesToBase642(bytes) {
   let s = "";
   for (let i = 0; i < bytes.length; i += 32768) {
@@ -3233,6 +3246,12 @@ function isPlainObject(v) {
   return proto === Object.prototype || proto === null;
 }
 async function encodeValue(value, sink) {
+  return encodeInner(value, sink, /* @__PURE__ */ new WeakSet());
+}
+function toStringTag(v) {
+  return Object.prototype.toString.call(v).slice(8, -1);
+}
+async function encodeInner(value, sink, path) {
   if (value === void 0) return { [TAG]: "undef" };
   if (value === null) return null;
   switch (typeof value) {
@@ -3251,6 +3270,8 @@ async function encodeValue(value, sink) {
     case "symbol":
       throw new TypeError(`runapps sync: ${typeof value} values cannot be stored`);
   }
+  const obj = value;
+  if (path.has(obj)) throw new TypeError("runapps sync: a value that contains itself cannot be synced");
   if (value instanceof Date) {
     const t = value.getTime();
     return { [TAG]: "date", v: Number.isNaN(t) ? "invalid" : t };
@@ -3259,13 +3280,34 @@ async function encodeValue(value, sink) {
   if (typeof Blob !== "undefined" && value instanceof Blob) {
     if (!sink) throw new TypeError("runapps sync: Blob values need a blob sink");
     const ref = await sink(value);
-    const out2 = { [TAG]: "blob", r: ref.ref, t: ref.type, s: ref.size };
+    const out = { [TAG]: "blob", r: ref.ref, t: ref.type, s: ref.size };
     const f = value;
     if (typeof File !== "undefined" && value instanceof File) {
-      out2.n = f.name;
-      out2.m = f.lastModified;
+      out.n = f.name;
+      out.m = f.lastModified;
     }
-    return out2;
+    return out;
+  }
+  if (value instanceof Error) {
+    const e = value;
+    path.add(obj);
+    try {
+      const out = { [TAG]: "err", n: ERROR_CTORS[e.name] ? e.name : "Error", m: String(e.message) };
+      if (typeof e.stack === "string") out.st = e.stack;
+      if ("cause" in e) out.c = await encodeInner(e.cause, sink, path);
+      return out;
+    } finally {
+      path.delete(obj);
+    }
+  }
+  if (value instanceof Number || value instanceof String || value instanceof Boolean || typeof BigInt !== "undefined" && toStringTag(obj) === "BigInt") {
+    return { [TAG]: "box", v: await encodeInner(value.valueOf(), sink, path) };
+  }
+  if (typeof ImageData !== "undefined" && value instanceof ImageData) {
+    const out = { [TAG]: "img", w: value.width, h: value.height, v: bytesToBase642(new Uint8Array(value.data.buffer, value.data.byteOffset, value.data.byteLength)) };
+    const cs = value.colorSpace;
+    if (cs) out.cs = cs;
+    return out;
   }
   if (value instanceof ArrayBuffer) {
     return { [TAG]: "bin", c: "ArrayBuffer", v: bytesToBase642(new Uint8Array(value)) };
@@ -3276,30 +3318,45 @@ async function encodeValue(value, sink) {
     const bytes = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
     return { [TAG]: "bin", c: name, v: bytesToBase642(bytes) };
   }
+  path.add(obj);
+  try {
+    return await encodeContainer(value, sink, path);
+  } finally {
+    path.delete(obj);
+  }
+}
+async function encodeContainer(value, sink, path) {
   if (value instanceof Map) {
     const v = [];
-    for (const [k, x] of value) v.push([await encodeValue(k, sink), await encodeValue(x, sink)]);
+    for (const [k, x] of value) v.push([await encodeInner(k, sink, path), await encodeInner(x, sink, path)]);
     return { [TAG]: "map", v };
   }
   if (value instanceof Set) {
     const v = [];
-    for (const x of value) v.push(await encodeValue(x, sink));
+    for (const x of value) v.push(await encodeInner(x, sink, path));
     return { [TAG]: "set", v };
   }
   if (Array.isArray(value)) {
     const out2 = new Array(value.length);
-    for (let i = 0; i < value.length; i++) out2[i] = await encodeValue(value[i], sink);
+    for (let i = 0; i < value.length; i++) out2[i] = await encodeInner(value[i], sink, path);
     return out2;
   }
   if (isPlainObject(value)) {
     const needsWrap = Object.prototype.hasOwnProperty.call(value, TAG);
     const out2 = {};
-    for (const k of Object.keys(value)) out2[k] = await encodeValue(value[k], sink);
+    for (const k of Object.keys(value)) defineOwn(out2, k, await encodeInner(value[k], sink, path));
     return needsWrap ? { [TAG]: "obj", v: out2 } : out2;
   }
+  const tag = toStringTag(value);
+  if (tag !== "Object" && tag !== "Arguments") {
+    throw new TypeError(`runapps sync: ${tag} values cannot be synced`);
+  }
   const out = {};
-  for (const k of Object.keys(value)) out[k] = await encodeValue(value[k], sink);
+  for (const k of Object.keys(value)) defineOwn(out, k, await encodeInner(value[k], sink, path));
   return out;
+}
+function defineOwn(o, k, v) {
+  Object.defineProperty(o, k, { value: v, writable: true, enumerable: true, configurable: true });
 }
 async function decodeValue(value, source) {
   if (value === null || typeof value !== "object") return value;
@@ -3351,12 +3408,28 @@ async function decodeValue(value, source) {
         }
         return blob;
       }
+      case "err": {
+        const C = ERROR_CTORS[t.n] ?? Error;
+        const e = new C(t.m);
+        if (t.st !== void 0) defineOwn(e, "stack", t.st);
+        if ("c" in t) defineOwn(e, "cause", await decodeValue(t.c, source));
+        return e;
+      }
+      case "box":
+        return Object(await decodeValue(t.v, source));
+      case "img": {
+        const bytes = base64ToBytes3(t.v);
+        const data = new Uint8ClampedArray(new ArrayBuffer(bytes.byteLength));
+        data.set(bytes);
+        if (typeof ImageData === "undefined") return { width: t.w, height: t.h, data };
+        return new ImageData(data, t.w, t.h, t.cs ? { colorSpace: t.cs } : void 0);
+      }
       case "obj":
         return decodeValue(t.v, source);
     }
   }
   const out = {};
-  for (const k of Object.keys(obj)) out[k] = await decodeValue(obj[k], source);
+  for (const k of Object.keys(obj)) defineOwn(out, k, await decodeValue(obj[k], source));
   return out;
 }
 function encodeKey(key) {
@@ -3403,8 +3476,9 @@ function hash32(s) {
   }
   return h >>> 0;
 }
-function deepEqual(a, b) {
+function deepEqual(a, b, depth = 0) {
   if (Object.is(a, b)) return true;
+  if (depth > 200) throw new RangeError("runapps sync: value too deep to compare");
   if (a === null || b === null || typeof a !== "object" || typeof b !== "object") return false;
   if (a instanceof Date || b instanceof Date) {
     return a instanceof Date && b instanceof Date && Object.is(a.getTime(), b.getTime());
@@ -3420,7 +3494,7 @@ function deepEqual(a, b) {
   }
   if (a instanceof Map || b instanceof Map) {
     if (!(a instanceof Map && b instanceof Map) || a.size !== b.size) return false;
-    for (const [k, v] of a) if (!b.has(k) || !deepEqual(v, b.get(k))) return false;
+    for (const [k, v] of a) if (!b.has(k) || !deepEqual(v, b.get(k), depth + 1)) return false;
     return true;
   }
   if (a instanceof Set || b instanceof Set) {
@@ -3430,7 +3504,7 @@ function deepEqual(a, b) {
   }
   if (Array.isArray(a) || Array.isArray(b)) {
     if (!(Array.isArray(a) && Array.isArray(b)) || a.length !== b.length) return false;
-    for (let i = 0; i < a.length; i++) if (!deepEqual(a[i], b[i])) return false;
+    for (let i = 0; i < a.length; i++) if (!deepEqual(a[i], b[i], depth + 1)) return false;
     return true;
   }
   const ka = Object.keys(a);
@@ -3438,19 +3512,37 @@ function deepEqual(a, b) {
   if (ka.length !== kb.length) return false;
   for (const k of ka) {
     if (!Object.prototype.hasOwnProperty.call(b, k)) return false;
-    if (!deepEqual(a[k], b[k])) return false;
+    if (!deepEqual(a[k], b[k], depth + 1)) return false;
   }
   return true;
 }
 function changedFields(prior, value) {
   if (!isPlainObject(prior) || !isPlainObject(value)) return void 0;
   const out = [];
-  for (const k of /* @__PURE__ */ new Set([...Object.keys(prior), ...Object.keys(value)])) {
-    const inP = Object.prototype.hasOwnProperty.call(prior, k);
-    const inV = Object.prototype.hasOwnProperty.call(value, k);
-    if (inP !== inV || !deepEqual(prior[k], value[k])) out.push(k);
+  try {
+    for (const k of /* @__PURE__ */ new Set([...Object.keys(prior), ...Object.keys(value)])) {
+      const inP = Object.prototype.hasOwnProperty.call(prior, k);
+      const inV = Object.prototype.hasOwnProperty.call(value, k);
+      if (inP !== inV || !deepEqual(prior[k], value[k])) out.push(k);
+    }
+  } catch {
+    return void 0;
   }
   return out;
+}
+function injectKey(value, keyPath, key) {
+  if (value === null || typeof value !== "object") return false;
+  const parts = keyPath.split(".");
+  let cur = value;
+  for (let i = 0; i < parts.length - 1; i++) {
+    const p = parts[i];
+    if (cur[p] === void 0) cur[p] = {};
+    const next = cur[p];
+    if (next === null || typeof next !== "object") return false;
+    cur = next;
+  }
+  cur[parts[parts.length - 1]] = key;
+  return true;
 }
 function extractKey(value, keyPath) {
   if (keyPath === null || keyPath === void 0) return void 0;
@@ -3510,6 +3602,7 @@ var BrowserAuth = class {
     __publicField(this, "popupOpenedAt", 0);
     __publicField(this, "userInfo", null);
     __publicField(this, "listeners", []);
+    __publicField(this, "identityListeners", []);
     __publicField(this, "parentHandshake", null);
     __publicField(this, "signingIn", false);
     /** Public token-fetcher; pass to RunApps as `apiKeyResolver`. */
@@ -3559,6 +3652,25 @@ var BrowserAuth = class {
     }
     if (typeof window === "undefined") return;
     this.loadPersisted();
+    if (typeof window.addEventListener === "function") window.addEventListener("storage", (e) => {
+      if (e.key !== storageKey(this.project)) return;
+      if (e.newValue) {
+        const before = this.token;
+        const beforeUser = this.userInfo?.id;
+        this.loadPersisted();
+        if (this.tokenIsFresh() && (this.token !== before || this.userInfo?.id !== beforeUser)) {
+          if (this.userInfo && !this.hideBadge) this.renderBadge();
+          this.notifyTokenChange();
+        }
+      } else if (this.token) {
+        this.token = null;
+        this.expiresAt = 0;
+        this.userInfo = null;
+        this.parentHandshake = null;
+        this.removeBadge();
+        this.notifyTokenChange();
+      }
+    });
     if (this.consumeFragment()) {
       this.clearSignedOut();
       if (new URLSearchParams(location.search).has(POPUP_PARAM)) {
@@ -3580,6 +3692,15 @@ var BrowserAuth = class {
     return () => {
       const i = this.listeners.indexOf(handler);
       if (i >= 0) this.listeners.splice(i, 1);
+    };
+  }
+  /** @internal Subscribe to any change of who is signed in, including
+   *  a sign-in or sign-out in another tab. */
+  onIdentityChange(handler) {
+    this.identityListeners.push(handler);
+    return () => {
+      const i = this.identityListeners.indexOf(handler);
+      if (i >= 0) this.identityListeners.splice(i, 1);
     };
   }
   /** Currently-authenticated user, or null. */
@@ -3818,9 +3939,17 @@ var BrowserAuth = class {
       if (!this.hideBadge) this.renderBadge();
     }
     this.savePersisted();
-    for (const fn of this.listeners) {
+    this.notifyTokenChange();
+  }
+  /** Tell the subscribers: onTokenChange for a token acquired,
+   *  onIdentityChange for any change (also signing out in another tab). */
+  notifyTokenChange() {
+    const fns = [...this.identityListeners];
+    const token = this.token;
+    if (token) for (const fn of this.listeners) fns.push(() => fn(token));
+    for (const fn of fns) {
       try {
-        fn(token);
+        fn();
       } catch (err) {
         console.warn("[runapps] onTokenChange handler threw", err);
       }
@@ -4940,6 +5069,9 @@ var WebService = class {
 // src/sync/hook.ts
 var txState = /* @__PURE__ */ new WeakMap();
 var observedDbs = /* @__PURE__ */ new WeakMap();
+var upgradeTx = /* @__PURE__ */ new WeakMap();
+var internalDbs = /* @__PURE__ */ new WeakSet();
+var lazyChecked = /* @__PURE__ */ new WeakSet();
 var subscribers = /* @__PURE__ */ new Set();
 var originals = null;
 function clone(v) {
@@ -4986,6 +5118,10 @@ var HookedOpenRequest = class {
       this.result = real.result;
       this.transaction = real.transaction;
       observedDbs.set(real.result, { name, subs });
+      if (real.transaction) {
+        track(real.transaction, name, subs);
+        upgradeTx.set(real.result, real.transaction);
+      }
       this.dispatch(makeEvent("upgradeneeded", { oldVersion: e.oldVersion, newVersion: e.newVersion }, this));
     });
     real.addEventListener("blocked", (ev) => {
@@ -5113,6 +5249,48 @@ function subscribersFor(factory, name) {
   }
   return out;
 }
+function track(tx, dbName, subs) {
+  if (txState.has(tx)) return;
+  const st = { db: dbName, subs, ops: [] };
+  txState.set(tx, st);
+  tx.addEventListener("complete", () => {
+    if (st.ops.length === 0) return;
+    const ops = st.ops;
+    st.ops = [];
+    for (const s of st.subs) {
+      const mine = ops.filter((op) => !s.opts.excludeStore(st.db, op.store));
+      if (mine.length === 0) continue;
+      try {
+        s.opts.onCommit(st.db, mine);
+      } catch (err) {
+        reportListenerError(err);
+      }
+    }
+  });
+}
+function lazyObserve(db) {
+  if (lazyChecked.has(db) || internalDbs.has(db)) return void 0;
+  lazyChecked.add(db);
+  if (typeof indexedDB === "undefined") return void 0;
+  const subs = subscribersFor(indexedDB, db.name);
+  if (subs.length === 0) return void 0;
+  const info = { name: db.name, subs };
+  observedDbs.set(db, info);
+  for (const s of subs) {
+    try {
+      void Promise.resolve(s.opts.onOpen(db, db.name)).catch(() => {
+      });
+    } catch {
+    }
+  }
+  return info;
+}
+function withGeneratedKey(store, snapshot, key) {
+  if (!store.autoIncrement || typeof store.keyPath !== "string" || store.keyPath === "") return snapshot;
+  if (extractKey(snapshot, store.keyPath) !== void 0) return snapshot;
+  injectKey(snapshot, store.keyPath, key);
+  return snapshot;
+}
 function patchPrototypes() {
   const F = IDBFactory.prototype;
   const D = IDBDatabase.prototype;
@@ -5127,6 +5305,7 @@ function patchPrototypes() {
     get: S.get,
     delete: S.delete,
     clear: S.clear,
+    deleteObjectStore: D.deleteObjectStore,
     getAllKeys: S.getAllKeys,
     cursorUpdate: C.update,
     cursorDelete: C.delete
@@ -5139,35 +5318,32 @@ function patchPrototypes() {
     return new HookedOpenRequest(real, name, subs);
   };
   F.deleteDatabase = function(name) {
-    for (const s of subscribersFor(this, name)) {
-      try {
-        s.opts.onDeleteDatabase(name);
-      } catch {
-      }
-    }
-    return o.deleteDatabase.call(this, name);
-  };
-  D.transaction = function(storeNames, mode, options) {
-    const tx = options !== void 0 ? o.transaction.call(this, storeNames, mode, options) : mode !== void 0 ? o.transaction.call(this, storeNames, mode) : o.transaction.call(this, storeNames);
-    const info = observedDbs.get(this);
-    if (info && tx.mode === "readwrite") {
-      const st = { db: info.name, subs: info.subs, ops: [] };
-      txState.set(tx, st);
-      tx.addEventListener("complete", () => {
-        if (st.ops.length === 0) return;
-        const ops = st.ops;
-        st.ops = [];
-        for (const s of st.subs) {
-          const mine = ops.filter((op) => !s.opts.excludeStore(st.db, op.store));
-          if (mine.length === 0) continue;
+    const subs = subscribersFor(this, name);
+    const r = o.deleteDatabase.call(this, name);
+    if (subs.length > 0) {
+      r.addEventListener("success", () => {
+        for (const s of subs) {
           try {
-            s.opts.onCommit(st.db, mine);
-          } catch (err) {
-            reportListenerError(err);
+            s.opts.onDeleteDatabase(name);
+          } catch {
           }
         }
       });
     }
+    return r;
+  };
+  D.deleteObjectStore = function(name) {
+    const info = observedDbs.get(this);
+    o.deleteObjectStore.call(this, name);
+    if (!info) return;
+    const tx = upgradeTx.get(this);
+    const st = tx ? txState.get(tx) : void 0;
+    if (st) st.ops.push({ store: name, kind: "clear" });
+  };
+  D.transaction = function(storeNames, mode, options) {
+    const tx = options !== void 0 ? o.transaction.call(this, storeNames, mode, options) : mode !== void 0 ? o.transaction.call(this, storeNames, mode) : o.transaction.call(this, storeNames);
+    const info = observedDbs.get(this) ?? lazyObserve(this);
+    if (info && tx.mode === "readwrite") track(tx, info.name, info.subs);
     return tx;
   };
   S.put = function(value, key) {
@@ -5192,8 +5368,9 @@ function patchPrototypes() {
       const store = this.name;
       const snapshot = clone(value);
       const priorSlot = prior;
+      const self = this;
       r.addEventListener("success", () => {
-        st.ops.push({ store, kind: "put", key: r.result, value: snapshot, prior: priorSlot?.value });
+        st.ops.push({ store, kind: "put", key: r.result, value: withGeneratedKey(self, snapshot, r.result), prior: priorSlot?.value });
       });
     }
     return r;
@@ -5204,26 +5381,31 @@ function patchPrototypes() {
     if (st) {
       const store = this.name;
       const snapshot = clone(value);
+      const self = this;
       r.addEventListener("success", () => {
-        st.ops.push({ store, kind: "put", key: r.result, value: snapshot });
+        st.ops.push({ store, kind: "put", key: r.result, value: withGeneratedKey(self, snapshot, r.result) });
       });
     }
     return r;
   };
   S.delete = function(query) {
     const st = tracked(this);
-    if (st) {
-      const store = this.name;
-      if (typeof IDBKeyRange === "function" && query instanceof IDBKeyRange) {
-        const kr = o.getAllKeys.call(this, query);
-        kr.addEventListener("success", () => {
-          for (const k of kr.result) st.ops.push({ store, kind: "del", key: k });
-        });
-      } else {
-        st.ops.push({ store, kind: "del", key: query });
-      }
+    if (!st) return o.delete.call(this, query);
+    const store = this.name;
+    let keys = [];
+    if (typeof IDBKeyRange === "function" && query instanceof IDBKeyRange) {
+      const kr = o.getAllKeys.call(this, query);
+      kr.addEventListener("success", () => {
+        keys = kr.result;
+      });
+    } else {
+      keys = [query];
     }
-    return o.delete.call(this, query);
+    const r = o.delete.call(this, query);
+    r.addEventListener("success", () => {
+      for (const k of keys) st.ops.push({ store, kind: "del", key: k });
+    });
+    return r;
   };
   S.clear = function() {
     const st = tracked(this);
@@ -5239,14 +5421,26 @@ function patchPrototypes() {
   C.update = function(value) {
     const store = cursorStore(this);
     const st = tracked(store);
-    const prior = st ? clone(this.value) : void 0;
+    let prior = null;
+    if (st && isPlainObject2(value)) {
+      try {
+        const g = o.get.call(store, this.primaryKey);
+        const slot = prior = { value: void 0 };
+        g.addEventListener("success", () => {
+          slot.value = g.result;
+        });
+      } catch {
+        prior = null;
+      }
+    }
     const r = o.cursorUpdate.call(this, value);
     if (st) {
       const name = store.name;
       const snapshot = clone(value);
       const key = this.primaryKey;
+      const priorSlot = prior;
       r.addEventListener("success", () => {
-        st.ops.push({ store: name, kind: "put", key, value: snapshot, prior });
+        st.ops.push({ store: name, kind: "put", key, value: snapshot, prior: priorSlot?.value });
       });
     }
     return r;
@@ -5254,8 +5448,14 @@ function patchPrototypes() {
   C.delete = function() {
     const store = cursorStore(this);
     const st = tracked(store);
-    if (st) st.ops.push({ store: store.name, kind: "del", key: this.primaryKey });
-    return o.cursorDelete.call(this);
+    const key = this.primaryKey;
+    const r = o.cursorDelete.call(this);
+    if (st) {
+      r.addEventListener("success", () => {
+        st.ops.push({ store: store.name, kind: "del", key });
+      });
+    }
+    return r;
   };
 }
 function restorePrototypes() {
@@ -5268,6 +5468,7 @@ function restorePrototypes() {
   IDBObjectStore.prototype.add = o.add;
   IDBObjectStore.prototype.delete = o.delete;
   IDBObjectStore.prototype.clear = o.clear;
+  IDBDatabase.prototype.deleteObjectStore = o.deleteObjectStore;
   IDBCursor.prototype.update = o.cursorUpdate;
   IDBCursor.prototype.delete = o.cursorDelete;
   originals = null;
@@ -5283,6 +5484,9 @@ function installIndexedDBHook(opts) {
   const factory = sub.factory;
   return {
     originalOpen: (name, version) => version === void 0 ? o.open.call(factory, name) : o.open.call(factory, name, version),
+    markInternal(db) {
+      internalDbs.add(db);
+    },
     uninstall() {
       subscribers.delete(sub);
       if (subscribers.size === 0) restorePrototypes();
@@ -5293,6 +5497,8 @@ function installIndexedDBHook(opts) {
 // src/sync/log.ts
 var SYNC_DB_NAME = "__runapps_sync__";
 var SYNC_DB_VERSION = 1;
+var SYNC_STATE_DB_NAME = "__runapps_sync_state__";
+var SYNC_STATE_DB_VERSION = 1;
 function req(r) {
   return new Promise((resolve, reject) => {
     r.onsuccess = () => resolve(r.result);
@@ -5309,36 +5515,59 @@ function done(tx) {
 var SyncLog = class {
   constructor(open) {
     __publicField(this, "open", open);
-    __publicField(this, "dbPromise", null);
+    __publicField(this, "mainPromise", null);
+    __publicField(this, "statePromise", null);
+  }
+  openDb(name, version, upgrade, reset) {
+    const p = new Promise((resolve, reject) => {
+      const r = this.open(name, version);
+      r.onupgradeneeded = () => upgrade(r.result);
+      r.onsuccess = () => {
+        const db = r.result;
+        db.onversionchange = () => {
+          db.close();
+          reset();
+        };
+        resolve(db);
+      };
+      r.onerror = () => reject(r.error ?? new Error(`cannot open ${name}`));
+      r.onblocked = () => reject(new Error(`${name} open blocked`));
+    });
+    p.catch(() => reset());
+    return p;
   }
   db() {
-    if (!this.dbPromise) {
-      this.dbPromise = new Promise((resolve, reject) => {
-        const r = this.open(SYNC_DB_NAME, SYNC_DB_VERSION);
-        r.onupgradeneeded = () => {
-          const db = r.result;
+    if (!this.mainPromise) {
+      this.mainPromise = this.openDb(
+        SYNC_DB_NAME,
+        SYNC_DB_VERSION,
+        (db) => {
           if (!db.objectStoreNames.contains("ops")) {
             const ops = db.createObjectStore("ops", { keyPath: "id", autoIncrement: true });
             ops.createIndex("store", ["db", "store"], { unique: false });
           }
           if (!db.objectStoreNames.contains("meta")) db.createObjectStore("meta");
-        };
-        r.onsuccess = () => {
-          const db = r.result;
-          db.onversionchange = () => {
-            db.close();
-            this.dbPromise = null;
-          };
-          resolve(db);
-        };
-        r.onerror = () => reject(r.error ?? new Error("cannot open sync log"));
-        r.onblocked = () => reject(new Error("sync log open blocked"));
-      });
-      this.dbPromise.catch(() => {
-        this.dbPromise = null;
-      });
+        },
+        () => this.mainPromise = null
+      );
     }
-    return this.dbPromise;
+    return this.mainPromise;
+  }
+  state() {
+    if (!this.statePromise) {
+      this.statePromise = this.openDb(
+        SYNC_STATE_DB_NAME,
+        SYNC_STATE_DB_VERSION,
+        (db) => {
+          if (!db.objectStoreNames.contains("applied")) db.createObjectStore("applied");
+          if (!db.objectStoreNames.contains("marks")) db.createObjectStore("marks");
+          if (!db.objectStoreNames.contains("dead")) db.createObjectStore("dead", { autoIncrement: true });
+          if (!db.objectStoreNames.contains("info")) db.createObjectStore("info");
+        },
+        () => this.statePromise = null
+      );
+    }
+    return this.statePromise;
   }
   async append(ops) {
     if (ops.length === 0) return;
@@ -5367,10 +5596,116 @@ var SyncLog = class {
     for (const id of ids) st.delete(id);
     await done(tx);
   }
-  async clearOps() {
+  /** Give every op whose owner is `from` (undefined: logged before owners
+   *  were recorded, or null: nobody signed in) to `to`. */
+  async reassignOwner(from, to) {
     const db = await this.db();
     const tx = db.transaction("ops", "readwrite");
-    tx.objectStore("ops").clear();
+    const cur = tx.objectStore("ops").openCursor();
+    cur.onsuccess = () => {
+      const c = cur.result;
+      if (!c) return;
+      const op = c.value;
+      if (from(op.owner)) c.update({ ...op, owner: to });
+      c.continue();
+    };
+    await done(tx);
+  }
+  /** Move ops that can never be pushed out of the way. */
+  async bury(ops) {
+    if (ops.length === 0) return;
+    const st = await this.state();
+    const tx = st.transaction("dead", "readwrite");
+    for (const { op, error } of ops) {
+      const { value: _v, ...rest } = op;
+      tx.objectStore("dead").add({ op: rest, error, at: Date.now() });
+    }
+    await done(tx);
+    await this.remove(ops.map((o) => o.op.id).filter((id) => id !== void 0));
+  }
+  /** db\0store\0kid of every op set aside. */
+  async deadKeys() {
+    const st = await this.state();
+    const tx = st.transaction("dead", "readonly");
+    const all = await req(tx.objectStore("dead").getAll());
+    return new Set(all.map((d) => d.op.db + "\0" + d.op.store + "\0" + d.op.kid));
+  }
+  async deadCount() {
+    const st = await this.state();
+    const tx = st.transaction("dead", "readonly");
+    return req(tx.objectStore("dead").count());
+  }
+  async appliedFor(dbName, store) {
+    const st = await this.state();
+    const tx = st.transaction("applied", "readonly");
+    const os = tx.objectStore("applied");
+    const range = IDBKeyRange.bound([dbName, store], [dbName, store, []]);
+    const keys = await req(os.getAllKeys(range));
+    const vals = await req(os.getAll(range));
+    const out = /* @__PURE__ */ new Map();
+    keys.forEach((k, i) => out.set(k[2], vals[i]));
+    return out;
+  }
+  /** Forget what this device holds of one store or a whole database,
+   *  and the shard ETags under `markPrefix`. */
+  async forgetApplied(dbName, store, markPrefix) {
+    const st = await this.state();
+    const tx = st.transaction(["applied", "marks"], "readwrite");
+    const range = store === void 0 ? IDBKeyRange.bound([dbName], [dbName, []]) : IDBKeyRange.bound([dbName, store], [dbName, store, []]);
+    tx.objectStore("applied").delete(range);
+    tx.objectStore("marks").delete(IDBKeyRange.bound(markPrefix, markPrefix + "\uFFFF"));
+    await done(tx);
+  }
+  /** Bookkeeping for one apply, in one transaction: what this device
+   *  now holds of each store, and the shard ETags applied (undefined:
+   *  forget). */
+  async commitApply(dbName, applied, marks) {
+    const st = await this.state();
+    const tx = st.transaction(["applied", "marks"], "readwrite");
+    const os = tx.objectStore("applied");
+    for (const [store, entries] of applied) {
+      for (const [kid, e] of entries) {
+        if (e === void 0) os.delete([dbName, store, kid]);
+        else os.put(e, [dbName, store, kid]);
+      }
+    }
+    const m = tx.objectStore("marks");
+    for (const [path, etag] of marks) {
+      if (etag === void 0) m.delete(path);
+      else m.put(etag, path);
+    }
+    await done(tx);
+  }
+  /** Every shard ETag applied record by record. */
+  async marks() {
+    const st = await this.state();
+    const tx = st.transaction("marks", "readonly");
+    const os = tx.objectStore("marks");
+    const keys = await req(os.getAllKeys());
+    const vals = await req(os.getAll());
+    const out = /* @__PURE__ */ new Map();
+    keys.forEach((k, i) => out.set(k, vals[i]));
+    return out;
+  }
+  /** The user `applied` describes. */
+  async stateOwner() {
+    const st = await this.state();
+    const tx = st.transaction("info", "readonly");
+    return await req(tx.objectStore("info").get("owner"));
+  }
+  /** Forget everything held (applied and marks) and record a new owner. */
+  async resetState(owner) {
+    const st = await this.state();
+    const tx = st.transaction(["applied", "marks", "info"], "readwrite");
+    tx.objectStore("applied").clear();
+    tx.objectStore("marks").clear();
+    tx.objectStore("info").put(owner, "owner");
+    await done(tx);
+  }
+  async setStateOwner(owner) {
+    const st = await this.state();
+    const tx = st.transaction("info", "readwrite");
+    tx.objectStore("info").put(owner, "owner");
     await done(tx);
   }
   async getMeta(key) {
@@ -5400,17 +5735,30 @@ var SyncLog = class {
     keys.forEach((k, i) => out.set(k, vals[i]));
     return out;
   }
-  async clearAll() {
+  /** Delete every meta entry whose key starts with one of `prefixes`. */
+  async deleteMetaWithPrefix(...prefixes) {
     const db = await this.db();
-    const tx = db.transaction(["ops", "meta"], "readwrite");
-    tx.objectStore("ops").clear();
-    tx.objectStore("meta").clear();
+    const tx = db.transaction("meta", "readwrite");
+    const st = tx.objectStore("meta");
+    for (const p of prefixes) st.delete(IDBKeyRange.bound(p, p + "\uFFFF"));
     await done(tx);
   }
+  /** A new owner: every meta entry, and everything held. The ops (which
+   *  carry their owner) and the dead letters stay. */
+  async resetForOwner(owner) {
+    const db = await this.db();
+    const tx = db.transaction("meta", "readwrite");
+    tx.objectStore("meta").clear();
+    await done(tx);
+    await this.resetState(owner);
+  }
   close() {
-    this.dbPromise?.then((db) => db.close()).catch(() => {
+    this.mainPromise?.then((db) => db.close()).catch(() => {
     });
-    this.dbPromise = null;
+    this.statePromise?.then((db) => db.close()).catch(() => {
+    });
+    this.mainPromise = null;
+    this.statePromise = null;
   }
 };
 
@@ -5456,7 +5804,19 @@ function mergeRecord(cur, inc, changed) {
   }
   return { k: inc.k, v: out, t: Math.max(cur.t, inc.t), f };
 }
-var TOMBSTONE_TTL_MS = 30 * 24 * 3600 * 1e3;
+function mergeInto(shard, clearedAt, ops) {
+  if (clearedAt > shard.cleared) {
+    shard.cleared = clearedAt;
+    for (const kid of Object.keys(shard.r)) {
+      if (shard.r[kid].t <= clearedAt) delete shard.r[kid];
+    }
+  }
+  for (const { kid, rec, changed } of ops) {
+    if (rec.t <= shard.cleared) continue;
+    shard.r[kid] = mergeRecord(shard.r[kid], rec, changed);
+  }
+}
+var TOMBSTONE_TTL_MS = 90 * 24 * 3600 * 1e3;
 var PUSH_CONCURRENCY = 6;
 var SHARD_CACHE_MAX = 256;
 var ADOPTED_TS = 1;
@@ -5464,24 +5824,114 @@ var LEADER_WAIT_MS = 250;
 var MAX_PUSH_DELAY_MS = 1e4;
 var BACKOFF_MIN_MS = 5e3;
 var BACKOFF_MAX_MS = 5 * 6e4;
+var WAL_STALE_MS = 2 * 6e4;
+var OTHER_OWNER_TTL_MS = 30 * 24 * 3600 * 1e3;
+var MAX_FUTURE_MS = 24 * 3600 * 1e3;
+var MAX_APPLY_ATTEMPTS = 3;
+var WAL_PREFIX = "__runapps_sync_wal:";
+var SEQ_KEY = "__runapps_sync_seq";
+var CLOCK_KEY = "__runapps_sync_clock";
 var Clock = class {
   constructor() {
     __publicField(this, "last", 0);
     __publicField(this, "offset", 0);
+    __publicField(this, "onOffset", null);
+  }
+  wall() {
+    return Date.now() + this.offset;
   }
   now() {
-    const t = Date.now() + this.offset;
-    this.last = t > this.last ? t : this.last + 1;
+    const t = this.wall();
+    this.last = t > this.last ? t : this.last + 1e-3;
     return this.last;
   }
+  /** A write time seen in the cloud: the next local write is later. */
+  witness(t) {
+    if (t > this.last && t < this.wall() + MAX_FUTURE_MS) this.last = t;
+  }
   observe(serverTime, localBefore, localAfter) {
-    const mid = (localBefore + localAfter) / 2;
-    const off = serverTime - mid;
-    if (Math.abs(off - this.offset) > 2e3) this.offset = off;
+    const off = serverTime - (localBefore + localAfter) / 2;
+    if (Math.abs(off - this.offset) > 2e3) {
+      this.offset = off;
+      this.onOffset?.(off);
+    }
+  }
+};
+var MemoryStorage = class {
+  constructor() {
+    __publicField(this, "m", /* @__PURE__ */ new Map());
+  }
+  get length() {
+    return this.m.size;
+  }
+  key(i) {
+    return [...this.m.keys()][i] ?? null;
+  }
+  getItem(k) {
+    return this.m.get(k) ?? null;
+  }
+  setItem(k, v) {
+    this.m.set(k, String(v));
+  }
+  removeItem(k) {
+    this.m.delete(k);
+  }
+};
+function defaultStorage() {
+  try {
+    const ls = typeof window !== "undefined" ? window.localStorage : void 0;
+    if (ls) {
+      ls.setItem("__runapps_probe", "1");
+      ls.removeItem("__runapps_probe");
+      return ls;
+    }
+  } catch {
+  }
+  return new MemoryStorage();
+}
+var UserChangedError = class extends Error {
+  constructor() {
+    super("the signed-in user changed");
   }
 };
 function pathSeg(s) {
-  return encodeURIComponent(s).replace(/%2F/gi, "%2F");
+  return encodeURIComponent(s);
+}
+function randomId() {
+  const c = globalThis.crypto;
+  if (c?.randomUUID) return c.randomUUID().replace(/-/g, "").slice(0, 12);
+  return Math.random().toString(36).slice(2, 14);
+}
+function emptyShard() {
+  return { v: 1, cleared: 0, r: {} };
+}
+function toShard(value) {
+  const s = value;
+  const r = s && typeof s.r === "object" && s.r !== null && !Array.isArray(s.r) ? s.r : {};
+  return { v: 1, cleared: typeof s?.cleared === "number" ? s.cleared : 0, r };
+}
+function validRec(rec) {
+  return rec !== null && typeof rec === "object" && typeof rec.t === "number" && "k" in rec;
+}
+function toJournal(value) {
+  const j = value;
+  if (!j || j.v !== 1 || typeof j.t !== "number" || typeof j.s !== "object" || j.s === null) return null;
+  for (const part of Object.values(j.s)) {
+    if (!part || !Array.isArray(part.n) || !Array.isArray(part.o)) return null;
+  }
+  return j;
+}
+function recHash(rec) {
+  return hash32(JSON.stringify(rec));
+}
+function newer(rec, a) {
+  if (!a) return true;
+  return rec.t > a.t || rec.t === a.t && a.h !== recHash(rec);
+}
+function permanentEncodeError(e) {
+  if (e instanceof TypeError || e instanceof RangeError) return e.message.startsWith("runapps sync:");
+  const name = e?.name;
+  return name === "NotReadableError" || name === "NotFoundError" || name === "DataCloneError";
 }
 var SyncEngine = class {
   constructor(deps, options = {}) {
@@ -5490,18 +5940,31 @@ var SyncEngine = class {
     __publicField(this, "log");
     __publicField(this, "hook");
     __publicField(this, "clock", new Clock());
+    __publicField(this, "storage");
+    __publicField(this, "tabId", randomId());
     __publicField(this, "schemas", /* @__PURE__ */ new Map());
+    /** Shard ETags this device has applied. */
     __publicField(this, "etags", /* @__PURE__ */ new Map());
     /** The last copy of a shard this engine read or wrote, with its etag:
      *  the next write merges into it and sends If-Match, and only a 412
      *  (someone else wrote in between) costs a read. Oldest first. */
     __publicField(this, "shardCache", /* @__PURE__ */ new Map());
+    /** Journals read (they never change), by path. */
+    __publicField(this, "journalCache", /* @__PURE__ */ new Map());
     /** Every shard path the last listing showed, and the prefixes that
      *  listing covered: a path under a covered prefix that isn't listed
      *  does not exist, and is created with If-None-Match, unread. */
     __publicField(this, "listedPaths", /* @__PURE__ */ new Set());
     __publicField(this, "listedPrefixes", /* @__PURE__ */ new Set());
+    /** Databases this device has pulled at least once (writes made before
+     *  are weak, see LoggedOp.weak). */
+    __publicField(this, "pulled", /* @__PURE__ */ new Set());
+    /** Failed applies per shard path (see MAX_APPLY_ATTEMPTS). */
+    __publicField(this, "applyFailures", /* @__PURE__ */ new Map());
     __publicField(this, "conns", /* @__PURE__ */ new Map());
+    /** This tab's WAL, by commit. */
+    __publicField(this, "walBatches", /* @__PURE__ */ new Map());
+    __publicField(this, "walNext", 0);
     __publicField(this, "state", { state: "off", pending: 0 });
     __publicField(this, "paused", false);
     __publicField(this, "disposed", false);
@@ -5511,10 +5974,12 @@ var SyncEngine = class {
     /** The page is going away (pagehide): writes ask to outlive it. */
     __publicField(this, "leaving", false);
     /** Databases the app opened in this page — the ones a scan for
-     *  records sync has never seen may open (see adoptLocal). */
+     *  records sync has never seen may open. */
     __publicField(this, "openedHere", /* @__PURE__ */ new Set());
     /** Called when this tab is granted the sync lock. */
     __publicField(this, "leaderWaiters", []);
+    /** Followers waiting for the leader to pull a database for them. */
+    __publicField(this, "pullWaiters", /* @__PURE__ */ new Map());
     __publicField(this, "pullTimer", null);
     __publicField(this, "backoffMs", 0);
     __publicField(this, "backoffUntil", 0);
@@ -5522,10 +5987,17 @@ var SyncEngine = class {
     __publicField(this, "cleanup", []);
     __publicField(this, "channel", null);
     __publicField(this, "metaLoaded", null);
-    __publicField(this, "logChain", Promise.resolve());
-    // ── State ────────────────────────────────────────────────────────
+    /** Ops of other users in the log (not counted as pending). */
+    __publicField(this, "foreign", 0);
     /** Set while a sync cycle pushes or applies something. */
     __publicField(this, "moved", false);
+    /** Set when an apply logged records the cloud did not have. */
+    __publicField(this, "adoptedAny", false);
+    __publicField(this, "pendingCache", null);
+    __publicField(this, "readyResolve", () => {
+    });
+    __publicField(this, "readyPromise", new Promise((r) => this.readyResolve = r));
+    __publicField(this, "logChain", Promise.resolve());
     this.options = {
       databases: options.databases ?? [],
       exclude: options.exclude ?? [],
@@ -5533,8 +6005,15 @@ var SyncEngine = class {
       pushDelayMs: options.pushDelayMs ?? 2500,
       pullIntervalMs: options.pullIntervalMs ?? 6e4,
       openTimeoutMs: options.openTimeoutMs ?? 5e3,
-      prefix: (options.prefix ?? "db").replace(/^\/+|\/+$/g, "")
+      prefix: (options.prefix ?? "db").replace(/^\/+|\/+$/g, ""),
+      journalFoldAfterMs: options.journalFoldAfterMs ?? 2 * 6e4,
+      journalKeepMs: options.journalKeepMs ?? 36e5
     };
+    this.storage = deps.storage ?? defaultStorage();
+    const savedClock = Number(this.safeGet(CLOCK_KEY));
+    if (savedClock > 0) this.clock.last = savedClock;
+    this.clock.onOffset = (off) => void this.log.setMeta({ "clock:offset": off }).catch(() => {
+    });
     const excludedDbs = new Set(this.options.exclude.filter((e) => !e.includes("/")));
     const excludedStores = new Set(this.options.exclude.filter((e) => e.includes("/")));
     const only = new Set(this.options.databases);
@@ -5551,13 +6030,18 @@ var SyncEngine = class {
       (name, version) => this.hook ? this.hook.originalOpen(name, version) : indexedDB.open(name, version)
     );
     if (typeof window !== "undefined") this.attachBrowserTriggers();
-    this.cleanup.push(deps.onAuthChange(() => this.schedule("auth")));
+    this.cleanup.push(deps.onAuthChange(() => void this.schedule("auth")));
     void this.refreshPending();
     void this.schedule("start");
   }
   // ── Public surface ───────────────────────────────────────────────
   status() {
     return { ...this.state };
+  }
+  /** Resolves once the first sync has run (or there is nobody to sync
+   *  for). */
+  ready() {
+    return this.readyPromise;
   }
   /** Push pending changes and pull remote ones now. */
   now() {
@@ -5566,13 +6050,6 @@ var SyncEngine = class {
       return Promise.resolve();
     }
     return this.enqueue(() => this.sync());
-  }
-  /** Send to the other tabs of this origin. */
-  post(msg) {
-    try {
-      this.channel?.postMessage(msg);
-    } catch {
-    }
   }
   pause() {
     this.paused = true;
@@ -5587,20 +6064,94 @@ var SyncEngine = class {
     if (this.pushTimer) clearTimeout(this.pushTimer);
     if (this.pullTimer) clearInterval(this.pullTimer);
     this.channel?.close();
-    for (const p of this.conns.values()) p.then((db) => db.close()).catch(() => {
+    for (const p of this.conns.values()) p.then((db) => db?.close()).catch(() => {
     });
     this.conns.clear();
     this.log.close();
     this.hook?.uninstall();
+    for (const w of this.pullWaiters.values()) w();
+    this.pullWaiters.clear();
+  }
+  /** Send to the other tabs of this origin. */
+  post(msg) {
+    try {
+      this.channel?.postMessage(msg);
+    } catch {
+    }
+  }
+  // ── Shared storage: WAL, change counter, clock ───────────────────
+  safeGet(key) {
+    try {
+      return this.storage.getItem(key);
+    } catch {
+      return null;
+    }
+  }
+  readSeq() {
+    return this.safeGet(SEQ_KEY);
+  }
+  bumpSeq() {
+    try {
+      this.storage.setItem(SEQ_KEY, String((Number(this.storage.getItem(SEQ_KEY)) || 0) + 1));
+    } catch {
+    }
+  }
+  writeWal() {
+    const key = WAL_PREFIX + this.tabId;
+    const all = [...this.walBatches.values()].flat();
+    try {
+      this.storage.setItem(CLOCK_KEY, String(this.clock.last));
+      if (all.length === 0) {
+        this.storage.removeItem(key);
+        return;
+      }
+      try {
+        this.storage.setItem(key, JSON.stringify(all));
+      } catch {
+        const byDb = /* @__PURE__ */ new Map();
+        for (const e of all) {
+          const cur = byDb.get(e[0]);
+          if (!cur || e[3] > cur[3]) byDb.set(e[0], [e[0], "*", "?", e[3], e[4], e[5]]);
+        }
+        this.storage.setItem(key, JSON.stringify([...byDb.values()]));
+      }
+    } catch {
+    }
+  }
+  /** Every tab's WAL entries, by storage key. */
+  readWal() {
+    const out = /* @__PURE__ */ new Map();
+    try {
+      const keys = [];
+      for (let i = 0; i < this.storage.length; i++) {
+        const k = this.storage.key(i);
+        if (k && k.startsWith(WAL_PREFIX)) keys.push(k);
+      }
+      for (const k of keys) {
+        try {
+          const v = JSON.parse(this.storage.getItem(k) ?? "[]");
+          if (Array.isArray(v)) out.set(k, v);
+        } catch {
+        }
+      }
+    } catch {
+    }
+    return out;
   }
   // ── Hook callbacks ───────────────────────────────────────────────
   onCommit(db, ops) {
+    const owner = this.deps.userId();
     const logged = [];
+    const localClears = [];
+    let ts = this.clock.now();
     for (const op of ops) {
-      const ts = this.clock.now();
-      if (op.kind === "clear") logged.push({ db, store: op.store, kind: "clear", kid: "", ts });
-      else if (op.kind === "del") logged.push({ db, store: op.store, kind: "del", kid: keyId(op.key), key: encodeKey(op.key), ts });
-      else {
+      if (op.kind === "clear") {
+        if (owner === null) localClears.push(op.store);
+        else logged.push({ db, store: op.store, kind: "clear", kid: "", ts, owner });
+        ts = this.clock.now();
+      } else if (op.kind === "del") {
+        logged.push({ db, store: op.store, kind: "del", kid: keyId(op.key), key: encodeKey(op.key), ts, owner });
+      } else {
         logged.push({
           db,
           store: op.store,
@@ -5609,11 +6160,20 @@ var SyncEngine = class {
           key: encodeKey(op.key),
           value: op.value,
           changed: op.prior === void 0 ? void 0 : changedFields(op.prior, op.value),
-          ts
+          ts,
+          owner
         });
       }
     }
-    this.enqueueLog(logged);
+    const wall = Date.now();
+    const batch = ++this.walNext;
+    this.walBatches.set(
+      batch,
+      logged.map((op) => [db, op.store, op.kind === "clear" ? "*" : op.kid, op.ts, wall, owner])
+    );
+    this.writeWal();
+    this.bumpSeq();
+    this.enqueueLog(logged, batch, localClears.length ? () => this.forgetLocal(db, localClears) : void 0);
     const byStore = /* @__PURE__ */ new Map();
     for (const op of ops) {
       let e = byStore.get(op.store);
@@ -5630,11 +6190,57 @@ var SyncEngine = class {
       this.post({ type: "db:change", change });
     }
   }
-  enqueueLog(ops) {
-    this.logChain = this.logChain.then(() => this.log.append(ops)).then(() => this.refreshPending()).then(() => {
+  enqueueLog(ops, walBatch, before) {
+    this.logChain = this.logChain.then(async () => {
+      if (before) await before();
+      await this.markWeak(ops);
+      await this.log.append(ops);
+      this.pendingCache = null;
+      if (walBatch !== void 0) {
+        this.walBatches.delete(walBatch);
+        this.writeWal();
+        this.bumpSeq();
+      }
+      await this.refreshPending();
       if (!this.leader) this.post({ type: "sync:request" });
     }).catch((err) => this.fail(err));
     this.schedulePush();
+  }
+  /** Ops written before this device ever pulled their database lose to
+   *  the cloud's copy (an app writing its defaults on a new device). */
+  async markWeak(ops) {
+    const seen = /* @__PURE__ */ new Map();
+    for (const op of ops) {
+      if (op.ts === ADOPTED_TS) continue;
+      let p = seen.get(op.db);
+      if (p === void 0) seen.set(op.db, p = await this.isPulled(op.db));
+      if (!p) op.weak = true;
+    }
+  }
+  async isPulled(db) {
+    if (this.pulled.has(db)) return true;
+    try {
+      if (await this.log.getMeta("pulled:" + db)) {
+        this.pulled.add(db);
+        return true;
+      }
+      const legacy = await this.log.metaWithPrefix(`etag:${this.dbPrefix(db)}`);
+      return legacy.size > 0;
+    } catch {
+      return false;
+    }
+  }
+  /** The app emptied stores while nobody was signed in: forget what this
+   *  device held of them, so the next pull fills them again. */
+  async forgetLocal(db, stores) {
+    for (const store of stores) {
+      const prefix = `${this.dbPrefix(db)}${pathSeg(store)}/`;
+      for (const p of [...this.etags.keys()]) if (p.startsWith(prefix)) this.etags.delete(p);
+      await this.log.forgetApplied(db, store, prefix);
+      await this.log.deleteMetaWithPrefix("etag:" + prefix);
+    }
+    this.pulled.delete(db);
+    await this.log.setMeta({ ["pulled:" + db]: void 0 });
   }
   async onOpen(db, name) {
     const schema = /* @__PURE__ */ new Map();
@@ -5653,28 +6259,77 @@ var SyncEngine = class {
     }
     this.schemas.set(name, schema);
     this.openedHere.add(name);
-    void this.log.setMeta({ ["schema:" + name]: Object.fromEntries(schema) }).catch(() => {
+    await this.log.setMeta({ ["schema:" + name]: Object.fromEntries(schema) }).catch(() => {
     });
     if (!this.deps.userId() || this.paused) return;
-    if (!this.leader && !await this.becomesLeader(LEADER_WAIT_MS)) return;
-    await this.enqueue(async () => {
+    if (!this.leader && !await this.becomesLeader(LEADER_WAIT_MS)) {
+      await this.askLeaderToPull(name);
+      return;
+    }
+    await this.pullOne(name).catch(() => {
+    });
+  }
+  /** Pull one database now (an open waits for it). */
+  pullOne(name) {
+    return this.enqueue(async () => {
       const userId = this.deps.userId();
-      if (!userId) return;
+      if (!userId || this.paused || this.disposed) return;
+      const check = this.checker(userId);
       await this.loadMeta();
+      await this.reloadSchemas();
+      await this.recoverWal();
       await this.ensureOwner(userId);
-      await this.pullDatabase(name);
-    }).catch(() => {
+      const errors = [];
+      await this.pullDbs(name, check, errors);
+      if (errors.length) throw errors[0];
+    });
+  }
+  askLeaderToPull(name) {
+    if (!this.channel) return Promise.resolve();
+    const id = randomId();
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.pullWaiters.delete(id);
+        resolve();
+      }, this.options.openTimeoutMs);
+      this.pullWaiters.set(id, () => {
+        clearTimeout(timer);
+        resolve();
+      });
+      this.post({ type: "pull", db: name, id });
     });
   }
   onDeleteDatabase(name) {
     const schema = this.schemas.get(name);
     const stores = schema ? Array.from(schema.keys()) : [];
     this.schemas.delete(name);
-    this.conns.get(name)?.then((db) => db.close()).catch(() => {
+    this.conns.get(name)?.then((db) => db?.close()).catch(() => {
     });
     this.conns.delete(name);
+    const owner = this.deps.userId();
     const ts = this.clock.now();
-    this.enqueueLog(stores.map((store) => ({ db: name, store, kind: "clear", kid: "", ts })));
+    const forget = async () => {
+      const prefix = this.dbPrefix(name);
+      for (const p of [...this.etags.keys()]) if (p.startsWith(prefix)) this.etags.delete(p);
+      for (const p of [...this.shardCache.keys()]) if (p.startsWith(prefix)) this.shardCache.delete(p);
+      await this.log.deleteMetaWithPrefix("etag:" + prefix, `adopted:${name}/`);
+      await this.log.setMeta({ ["schema:" + name]: void 0 });
+      await this.log.forgetApplied(name, void 0, prefix);
+      if (owner === null) {
+        this.pulled.delete(name);
+        await this.log.setMeta({ ["pulled:" + name]: void 0 });
+      }
+    };
+    if (owner === null) {
+      this.logChain = this.logChain.then(forget).catch((err) => this.fail(err));
+      return;
+    }
+    const op = { db: name, store: "", kind: "dbclear", kid: "", value: stores, ts, owner };
+    const batch = ++this.walNext;
+    this.walBatches.set(batch, [[name, "*", "*", ts, Date.now(), owner]]);
+    this.writeWal();
+    this.bumpSeq();
+    this.enqueueLog([op], batch, forget);
   }
   // ── Scheduling ───────────────────────────────────────────────────
   attachBrowserTriggers() {
@@ -5714,11 +6369,24 @@ var SyncEngine = class {
           if (!this.leader) {
             this.state = { ...d.state };
             this.deps.events.emit("sync:state", { ...d.state });
+            if (d.state.state !== "syncing") this.readyResolve();
           }
         } else if (d.type === "sync:request") {
           if (this.leader) {
             this.post({ type: "sync:state", state: { ...this.state } });
             void this.schedule("peer");
+          }
+        } else if (d.type === "pull") {
+          if (this.leader) {
+            const id = d.id;
+            void this.pullOne(d.db).catch(() => {
+            }).then(() => this.post({ type: "pulled", id }));
+          }
+        } else if (d.type === "pulled") {
+          const w = this.pullWaiters.get(d.id);
+          if (w) {
+            this.pullWaiters.delete(d.id);
+            w();
           }
         } else if (d.source === "remote") {
           this.deps.events.emit("db:change", d);
@@ -5810,11 +6478,14 @@ var SyncEngine = class {
     });
     return run;
   }
+  // ── State ────────────────────────────────────────────────────────
   setState(patch) {
     const next = { ...this.state, ...patch };
-    if (patch.state && patch.state !== "error") delete next.error;
-    const changed = next.state !== this.state.state || next.pending !== this.state.pending || next.lastSyncedAt !== this.state.lastSyncedAt || next.lastChangeAt !== this.state.lastChangeAt || next.error !== this.state.error;
+    if (patch.state && patch.state !== "error" && patch.state !== "offline") delete next.error;
+    if (!next.failed) delete next.failed;
+    const changed = next.state !== this.state.state || next.pending !== this.state.pending || next.failed !== this.state.failed || next.lastSyncedAt !== this.state.lastSyncedAt || next.lastChangeAt !== this.state.lastChangeAt || next.error !== this.state.error;
     this.state = next;
+    if (patch.state && patch.state !== "syncing") this.readyResolve();
     if (changed) {
       this.deps.events.emit("sync:state", { ...next });
       if (this.leader) this.post({ type: "sync:state", state: { ...next } });
@@ -5823,7 +6494,8 @@ var SyncEngine = class {
   async refreshPending() {
     try {
       const n = await this.log.pendingCount();
-      this.setState({ pending: n });
+      const failed = await this.log.deadCount();
+      this.setState({ pending: Math.max(0, n - this.foreign), failed });
     } catch {
     }
   }
@@ -5835,17 +6507,47 @@ var SyncEngine = class {
     this.setState({ state: offline ? "offline" : "error", error: msg });
     if (!offline && typeof console !== "undefined") console.warn("[runapps sync]", msg);
   }
-  // ── Sync ─────────────────────────────────────────────────────────
+  // ── Meta, owner, recovery ────────────────────────────────────────
+  dbPrefix(db) {
+    return `${this.options.prefix}/${pathSeg(db)}/`;
+  }
+  journalPrefix(db) {
+    return `${this.options.prefix}/@j/${pathSeg(db)}/`;
+  }
+  shardPath(db, store, shard) {
+    return `${this.dbPrefix(db)}${pathSeg(store)}/${shard}.json`;
+  }
+  /** db, store and shard of a shard path; null for anything else. */
+  parseShardPath(path) {
+    const p = this.options.prefix + "/";
+    if (!path.startsWith(p)) return null;
+    const m = /^([^/@][^/]*)\/([^/]+)\/(\d+)\.json$/.exec(path.slice(p.length));
+    if (!m) return null;
+    try {
+      return { db: decodeURIComponent(m[1]), store: decodeURIComponent(m[2]), n: Number(m[3]) };
+    } catch {
+      return null;
+    }
+  }
+  parseJournalPath(path) {
+    const p = this.options.prefix + "/@j/";
+    if (!path.startsWith(p)) return null;
+    const m = /^([^/]+)\/[^/]+\.json$/.exec(path.slice(p.length));
+    if (!m) return null;
+    try {
+      return { db: decodeURIComponent(m[1]) };
+    } catch {
+      return null;
+    }
+  }
   async loadMeta() {
     if (!this.metaLoaded) {
       this.metaLoaded = (async () => {
-        for (const [k, v] of await this.log.metaWithPrefix("etag:")) this.etags.set(k.slice(5), v);
-        for (const [k, v] of await this.log.metaWithPrefix("schema:")) {
-          const name = k.slice(7);
-          if (!this.schemas.has(name)) {
-            this.schemas.set(name, new Map(Object.entries(v)));
-          }
-        }
+        for (const [path, etag] of await this.log.marks()) this.etags.set(path, etag);
+        for (const k of (await this.log.metaWithPrefix("pulled:")).keys()) this.pulled.add(k.slice(7));
+        const off = await this.log.getMeta("clock:offset");
+        if (typeof off === "number") this.clock.offset = off;
+        await this.reloadSchemas();
       })();
       this.metaLoaded.catch(() => {
         this.metaLoaded = null;
@@ -5853,32 +6555,138 @@ var SyncEngine = class {
     }
     return this.metaLoaded;
   }
+  /** Shard ETags an SDK before 0.20 applied (whole shards, without
+   *  recording records). A shard still at that version is recorded from
+   *  its content, without writing anything here. An older SDK still open
+   *  in another tab keeps writing these. */
+  async legacyEtags() {
+    const out = /* @__PURE__ */ new Map();
+    for (const [k, v] of await this.log.metaWithPrefix("etag:")) out.set(k.slice(5), v);
+    return out;
+  }
+  /** Schemas as the tabs last saw them (a follower may have opened a
+   *  database this tab never did). */
+  async reloadSchemas() {
+    for (const [k, v] of await this.log.metaWithPrefix("schema:")) {
+      const name = k.slice(7);
+      if (this.openedHere.has(name) && this.schemas.has(name)) continue;
+      this.schemas.set(name, new Map(Object.entries(v)));
+    }
+  }
+  checker(userId) {
+    return () => {
+      if (this.deps.userId() !== userId) throw new UserChangedError();
+    };
+  }
   /** The local copy belongs to one user. Another user signing in on the
-   *  same browser starts from the server's copy, never from theirs. */
+   *  same browser starts from the server's copy, never from theirs; the
+   *  first user's unsent changes stay in the log, for when they sign in
+   *  here again. */
   async ensureOwner(userId) {
     const owner = await this.log.getMeta("owner");
-    if (owner === userId) return;
-    if (owner !== void 0) {
+    const stateOwner = await this.log.stateOwner();
+    if (owner === userId && stateOwner === userId) return;
+    if (owner !== void 0 && owner !== userId) {
+      await this.log.reassignOwner((o) => o == null, owner);
       for (const [db, schema] of this.schemas) {
-        for (const store of schema.keys()) {
-          if (this.storeExcluded(db, store)) continue;
-          await this.withStore(db, store, "readwrite", (st) => {
-            st.clear();
-          }).catch(() => {
-          });
-          this.emitChange({ db, store, keys: [], cleared: true, source: "remote" });
-        }
+        const stores = [...schema.keys()].filter((s) => !this.storeExcluded(db, s));
+        if (stores.length === 0) continue;
+        const h = await this.conn(db);
+        if (!h) continue;
+        const present = stores.filter((s) => h.objectStoreNames.contains(s));
+        if (present.length === 0) continue;
+        const tx = h.transaction(present, "readwrite");
+        for (const s of present) tx.objectStore(s).clear();
+        await done(tx);
+        for (const store of present) this.emitChange({ db, store, keys: [], cleared: true, source: "remote" });
       }
-      await this.log.clearAll();
-      this.etags.clear();
-      this.shardCache.clear();
+      const schemas = {};
+      for (const [db, schema] of this.schemas) schemas["schema:" + db] = Object.fromEntries(schema);
+      await this.log.resetForOwner(userId);
+      await this.log.setMeta({ ...schemas, "clock:offset": this.clock.offset });
+      this.pulled.clear();
+      this.journalCache.clear();
       this.listedPaths.clear();
       this.listedPrefixes.clear();
-      this.metaLoaded = null;
-      await this.loadMeta();
+    } else if (stateOwner !== userId) {
+      await this.log.resetState(userId);
     }
+    this.etags.clear();
+    this.shardCache.clear();
+    this.applyFailures.clear();
+    this.pendingCache = null;
     await this.log.setMeta({ owner: userId });
   }
+  /** Writes whose logging never finished (their tab closed between the
+   *  commit and the log write): log them again from the database. */
+  async recoverWal() {
+    const now = Date.now();
+    const ownKey = WAL_PREFIX + this.tabId;
+    const stale = [];
+    const staleKeys = [];
+    for (const [k, entries] of this.readWal()) {
+      if (k === ownKey) continue;
+      if (entries.every((e) => now - e[4] > WAL_STALE_MS)) {
+        stale.push(...entries);
+        staleKeys.push(k);
+      }
+    }
+    if (stale.length === 0) return;
+    const pending = await this.log.pending();
+    const logged = /* @__PURE__ */ new Map();
+    for (const op of pending) {
+      const k = op.db + "\0" + op.store + "\0" + op.kid;
+      logged.set(k, Math.max(logged.get(k) ?? 0, op.ts));
+    }
+    const ops = [];
+    for (const [db, store, kid, ts, , owner] of stale) {
+      if (kid === "?") {
+        console.warn("[runapps sync] some changes made just before a tab closed could not be recovered", db);
+        continue;
+      }
+      if (store === "*") {
+        if ((logged.get(db + "\0\0") ?? 0) < ts) ops.push({ db, store: "", kind: "dbclear", kid: "", value: [], ts, owner });
+        continue;
+      }
+      if (kid === "*") {
+        if ((logged.get(db + "\0" + store + "\0") ?? 0) < ts) ops.push({ db, store, kind: "clear", kid: "", ts, owner });
+        continue;
+      }
+      if ((logged.get(db + "\0" + store + "\0" + kid) ?? 0) >= ts) continue;
+      let key;
+      try {
+        key = decodeKey(JSON.parse(kid));
+      } catch {
+        continue;
+      }
+      let value;
+      let found = false;
+      const ok = await this.withStore(db, store, "readonly", (st) => {
+        const r = st.get(key);
+        r.onsuccess = () => {
+          value = r.result;
+          found = r.result !== void 0;
+        };
+      }).catch(() => false);
+      if (!ok) continue;
+      ops.push(
+        found ? { db, store, kind: "put", kid, key: encodeKey(key), value, ts, owner } : { db, store, kind: "del", kid, key: encodeKey(key), ts, owner }
+      );
+    }
+    if (ops.length) {
+      await this.markWeak(ops);
+      await this.log.append(ops);
+      this.pendingCache = null;
+    }
+    for (const k of staleKeys) {
+      try {
+        this.storage.removeItem(k);
+      } catch {
+      }
+    }
+    this.bumpSeq();
+  }
+  // ── Sync ─────────────────────────────────────────────────────────
   async sync() {
     if (this.disposed || this.paused || !this.leader) return;
     const userId = this.deps.userId();
@@ -5886,30 +6694,43 @@ var SyncEngine = class {
       this.setState({ state: "off" });
       return;
     }
+    const check = this.checker(userId);
     this.setState({ state: "syncing" });
     this.moved = false;
+    this.adoptedAny = false;
+    const errors = [];
+    const keep = (e) => {
+      if (e instanceof UserChangedError) throw e;
+      errors.push(e);
+    };
     try {
       await this.loadMeta();
-      await this.ensureOwner(userId);
+      await this.reloadSchemas();
       await this.logChain;
-      await this.push();
-      await this.pull();
-      if (await this.adoptLocal()) await this.push();
+      await this.recoverWal();
+      await this.ensureOwner(userId);
+      await this.pullDbs(null, check, errors).catch(keep);
+      await this.push(userId, check).catch(keep);
+      await this.adoptScan(check).catch(keep);
+      if (this.adoptedAny) await this.push(userId, check).catch(keep);
+      await this.refreshPending();
+      if (errors.length) throw errors[0];
       this.backoffMs = 0;
       this.backoffUntil = 0;
-      await this.refreshPending();
       const now = Date.now();
       this.setState({ state: "idle", lastSyncedAt: now, ...this.moved ? { lastChangeAt: now } : {} });
     } catch (err) {
       await this.refreshPending();
+      if (err instanceof UserChangedError) {
+        this.setState({ state: "idle" });
+        queueMicrotask(() => void this.schedule("auth"));
+        return;
+      }
       this.fail(err);
     }
   }
   storeExcluded(db, store) {
     return this.options.exclude.includes(db + "/" + store) || this.options.exclude.includes(db);
-  }
-  shardPath(db, store, shard) {
-    return `${this.options.prefix}/${pathSeg(db)}/${pathSeg(store)}/${shard}.json`;
   }
   shardOf(kid) {
     return hash32(kid) % this.options.shards;
@@ -5917,118 +6738,212 @@ var SyncEngine = class {
   async readShard(path) {
     const before = Date.now();
     const r = await this.deps.remote.getJSON(path);
-    if (r.status === "ok") {
-      if (r.serverTime) this.clock.observe(r.serverTime, before, Date.now());
-      const s = r.value;
-      const shard = { v: 1, cleared: s?.cleared ?? 0, r: s?.r ?? {} };
-      return { shard, etag: r.etag };
-    }
-    return { shard: { v: 1, cleared: 0, r: {} } };
+    if (r.status !== "corrupt" && r.serverTime) this.clock.observe(r.serverTime, before, Date.now());
+    if (r.status === "ok") return { shard: toShard(r.value), etag: r.etag };
+    if (r.status === "corrupt") return { shard: emptyShard(), etag: r.etag || void 0 };
+    return { shard: emptyShard() };
   }
   // ── Push ─────────────────────────────────────────────────────────
-  async push() {
-    const ops = await this.log.pending();
-    if (ops.length === 0) return;
-    const groups = /* @__PURE__ */ new Map();
-    for (const op of ops) {
-      const k = op.db + "\0" + op.store;
-      let g = groups.get(k);
-      if (!g) groups.set(k, g = []);
+  async push(userId, check) {
+    const all = await this.log.pending();
+    const wall = this.clock.wall();
+    const stale = all.filter((op) => op.owner != null && op.owner !== userId && wall - op.ts > OTHER_OWNER_TTL_MS);
+    if (stale.length) await this.log.remove(stale.map((op) => op.id).filter((id) => id !== void 0));
+    const mine = all.filter((op) => op.owner == null || op.owner === userId);
+    this.foreign = all.length - mine.length - stale.length;
+    if (mine.length === 0) return;
+    const byDb = /* @__PURE__ */ new Map();
+    for (const op of mine) {
+      let g = byDb.get(op.db);
+      if (!g) byDb.set(op.db, g = []);
       g.push(op);
     }
+    const errors = [];
+    for (const [db, ops] of byDb) {
+      try {
+        await this.pushDb(db, ops, check);
+      } catch (e) {
+        if (e instanceof UserChangedError) throw e;
+        errors.push(e);
+      }
+    }
+    if (errors.length) throw errors[0];
+  }
+  async pushDb(db, ops, check) {
     const idsOf = (list) => list.map((op) => op.id).filter((id) => id !== void 0);
+    const settling = new Set(idsOf(ops));
     const settle = async (ids) => {
       if (ids.length === 0) return;
       await this.log.remove(ids);
+      this.pendingCache = null;
       this.moved = true;
       await this.refreshPending();
     };
-    const limit = limiter(PUSH_CONCURRENCY);
-    const work = [];
-    for (const [, g] of groups) {
-      const db = g[0].db;
-      const store = g[0].store;
+    const expanded = [];
+    for (const op of ops) {
+      if (op.kind !== "dbclear") {
+        expanded.push(op);
+        continue;
+      }
+      const stores = new Set(Array.isArray(op.value) ? op.value : []);
+      for (const s of this.schemas.get(db)?.keys() ?? []) stores.add(s);
+      for (const e of await this.deps.remote.list(this.dbPrefix(db))) {
+        const p = this.parseShardPath(e.path);
+        if (p && p.db === db) stores.add(p.store);
+      }
+      for (const store of stores) expanded.push({ ...op, store, kind: "clear" });
+    }
+    const groups = /* @__PURE__ */ new Map();
+    for (const op of expanded) {
+      let g = groups.get(op.store);
+      if (!g) groups.set(op.store, g = []);
+      g.push(op);
+    }
+    const writes = [];
+    const buried = [];
+    const afterStore = /* @__PURE__ */ new Map();
+    const dropNow = [];
+    for (const [store, g] of groups) {
       if (this.storeExcluded(db, store)) {
-        work.push(settle(idsOf(g)));
+        dropNow.push(...idsOf(g));
         continue;
       }
       let clearedAt = 0;
       let lastClear = -1;
       g.forEach((op, i) => {
         if (op.kind === "clear") {
-          clearedAt = Math.max(clearedAt, op.ts);
+          clearedAt = Math.max(clearedAt, op.weak ? ADOPTED_TS : op.ts);
           lastClear = i;
         }
       });
-      const live = g.slice(lastClear + 1);
       const byShard = /* @__PURE__ */ new Map();
-      for (const op of live) {
-        const s = this.shardOf(op.kid);
-        let list = byShard.get(s);
-        if (!list) byShard.set(s, list = []);
-        list.push(op);
+      for (const op of g.slice(lastClear + 1)) {
+        let so;
+        try {
+          so = await this.encodeOp(op);
+        } catch (e) {
+          if (!permanentEncodeError(e)) throw e;
+          buried.push({ op, error: e instanceof Error ? e.message : String(e) });
+          continue;
+        }
+        const n = this.shardOf(op.kid);
+        let w = byShard.get(n);
+        if (!w) byShard.set(n, w = { ops: [], ids: [] });
+        w.ops.push(so);
+        if (op.id !== void 0) w.ids.push(op.id);
       }
       const shards = clearedAt > 0 ? Array.from({ length: this.options.shards }, (_, i) => i) : Array.from(byShard.keys());
-      const written = shards.map(
-        (n) => limit(async () => {
-          const path = this.shardPath(db, store, n);
-          const shardOps = byShard.get(n) ?? [];
-          const encoded = await Promise.all(shardOps.map((op) => this.encodeOp(op)));
-          const { etag, applied } = await this.writeShard(path, clearedAt, encoded);
-          await this.log.setMeta({ ["etag:" + path]: applied ? etag : void 0 });
-          await settle(idsOf(shardOps));
-        })
-      );
-      work.push(Promise.all(written).then(() => settle(idsOf(g.slice(0, lastClear + 1)))));
+      for (const n of shards) {
+        const w = byShard.get(n);
+        writes.push({ store, n, cleared: clearedAt, ops: w?.ops ?? [], ids: w?.ids ?? [] });
+      }
+      afterStore.set(store, idsOf(g.slice(0, lastClear + 1)));
     }
-    const results = await Promise.allSettled(work);
+    if (buried.length) {
+      for (const b of buried) console.warn(`[runapps sync] a change to ${b.op.db}/${b.op.store} cannot be synced and was set aside:`, b.error);
+      await this.log.bury(buried);
+      this.pendingCache = null;
+    }
+    await settle(dropNow);
+    if (writes.length === 0) {
+      for (const ids of afterStore.values()) await settle(ids);
+      return;
+    }
+    let journal = null;
+    if (writes.length > 1) {
+      const id = `${Math.floor(this.clock.wall())}-${randomId()}`;
+      const j = { v: 1, id, db, t: this.clock.now(), s: {} };
+      for (const w of writes) {
+        let part = j.s[w.store];
+        if (!part) j.s[w.store] = part = { n: [], o: [] };
+        if (w.cleared) part.c = w.cleared;
+        part.n.push(w.n);
+        for (const so of w.ops) part.o.push(so.changed ? [so.kid, so.rec, so.changed] : [so.kid, so.rec]);
+      }
+      const path = `${this.journalPrefix(db)}${id}.json`;
+      check();
+      const r = await this.deps.remote.putJSON(path, j, { ifNoneMatch: true }, this.leaving ? { keepalive: true } : void 0);
+      if (r.status !== "ok") throw new Error(`could not write ${path}`);
+      this.journalCache.set(path, j);
+      journal = { path, j };
+    }
+    const limit = limiter(PUSH_CONCURRENCY);
+    const storeLeft = /* @__PURE__ */ new Map();
+    for (const w of writes) storeLeft.set(w.store, (storeLeft.get(w.store) ?? 0) + 1);
+    const results = await Promise.allSettled(
+      writes.map(
+        (w) => limit(async () => {
+          const path = this.shardPath(db, w.store, w.n);
+          const res = await this.writeShard(path, w.cleared, w.ops, check);
+          const own = new Map(w.ops.map((so) => [so.kid, so.rec]));
+          await this.applyWritten(db, w.store, w.n, res, settling, own, check);
+          await settle(w.ids);
+          const left = storeLeft.get(w.store) - 1;
+          storeLeft.set(w.store, left);
+          if (left === 0) await settle(afterStore.get(w.store) ?? []);
+        })
+      )
+    );
     const failed = results.find((r) => r.status === "rejected");
     if (failed) throw failed.reason;
+    if (journal) await this.log.setMeta({ ["jv:" + journal.path]: Date.now() });
   }
   async encodeOp(op) {
-    if (op.kind === "del") return { kid: op.kid, rec: { k: op.key, v: null, t: op.ts, d: 1 } };
+    const t = op.weak ? ADOPTED_TS : op.ts;
+    if (op.kind === "del") return { kid: op.kid, rec: { k: op.key, v: null, t, d: 1 } };
     const v = await encodeValue(op.value, (blob) => this.storeBlob(blob));
-    return { kid: op.kid, rec: { k: op.key, v, t: op.ts }, changed: op.changed };
+    return { kid: op.kid, rec: { k: op.key, v, t }, changed: op.changed };
   }
   /** Merge ops into one shard and write it; retried on a 412. The first
    *  try starts from the cached copy, or from nothing when the last
-   *  listing showed no such shard — no read either way. */
-  async writeShard(path, clearedAt, ops) {
-    const appliedEtag = this.etags.get(path);
+   *  listing showed no such shard — no read either way. Returns the
+   *  shard as it now is, and its ETag (none when there is no file). */
+  async writeShard(path, clearedAt, ops, check) {
     for (let attempt = 0; attempt < 5; attempt++) {
       const cached = attempt === 0 ? this.shardCache.get(path) : void 0;
-      const { shard, etag } = cached ? { shard: copyShard(cached.shard), etag: cached.etag } : attempt === 0 && this.knownAbsent(path) ? { shard: { v: 1, cleared: 0, r: {} }, etag: void 0 } : await this.readShard(path);
-      const now = this.clock.now();
-      if (clearedAt > shard.cleared) {
-        shard.cleared = clearedAt;
-        for (const kid of Object.keys(shard.r)) {
-          if (shard.r[kid].t <= clearedAt) delete shard.r[kid];
-        }
+      const base = cached ? { shard: copyShard(cached.shard), etag: cached.etag } : attempt === 0 && this.knownAbsent(path) ? { shard: emptyShard() } : await this.readShard(path);
+      const shard = base.shard;
+      const before = JSON.stringify(shard);
+      mergeInto(shard, clearedAt, ops);
+      if (JSON.stringify(shard) === before) {
+        if (base.etag || Object.keys(shard.r).length === 0 && !shard.cleared) return { etag: base.etag, shard };
       }
-      for (const { kid, rec, changed } of ops) {
-        if (rec.t <= shard.cleared) continue;
-        shard.r[kid] = mergeRecord(shard.r[kid], rec, changed);
-      }
+      const now = this.clock.wall();
       for (const kid of Object.keys(shard.r)) {
         const rec = shard.r[kid];
         if (rec.d && now - rec.t > TOMBSTONE_TTL_MS) delete shard.r[kid];
       }
-      const before = Date.now();
-      const r = await this.deps.remote.putJSON(path, shard, etag ? { ifMatch: etag } : { ifNoneMatch: true }, this.leaving ? { keepalive: true } : void 0);
+      check?.();
+      const t0 = Date.now();
+      const r = await this.deps.remote.putJSON(path, shard, base.etag ? { ifMatch: base.etag } : { ifNoneMatch: true }, this.leaving ? { keepalive: true } : void 0);
       if (r.status === "ok") {
-        if (r.serverTime) this.clock.observe(r.serverTime, before, Date.now());
-        const applied = etag === appliedEtag;
-        if (applied) this.etags.set(path, r.etag);
-        else this.etags.delete(path);
+        if (r.serverTime) this.clock.observe(r.serverTime, t0, Date.now());
         this.cacheShard(path, r.etag, shard);
         this.listedPaths.add(path);
-        return { etag: r.etag, applied };
+        return { etag: r.etag, shard };
       }
-      this.etags.delete(path);
       this.shardCache.delete(path);
       this.listedPaths.add(path);
     }
     throw new Error(`could not write ${path}: too many concurrent writers`);
+  }
+  /** A shard this device just wrote is the cloud's current version: it
+   *  holds what this device pushed, merged with what others wrote (a
+   *  field merge, a retried write after a 412, a clear). Apply it here,
+   *  as a pull would. */
+  async applyWritten(db, store, n, res, settling, own, check) {
+    if (!this.schemas.get(db)?.has(store) || this.storeExcluded(db, store)) return;
+    const path = this.shardPath(db, store, n);
+    await this.applyDb(
+      db,
+      {
+        views: /* @__PURE__ */ new Map([[store, /* @__PURE__ */ new Map([[n, res.shard]])]]),
+        marks: res.etag ? /* @__PURE__ */ new Map([[path, res.etag]]) : /* @__PURE__ */ new Map(),
+        settling,
+        own: own ? /* @__PURE__ */ new Map([[store, own]]) : void 0
+      },
+      check
+    );
   }
   cacheShard(path, etag, shard) {
     this.shardCache.delete(path);
@@ -6058,221 +6973,633 @@ var SyncEngine = class {
     await this.deps.remote.putBlob(ref, blob);
     return { ref, type: blob.type, size: blob.size };
   }
+  // ── Pull ─────────────────────────────────────────────────────────
+  /** Pull every database this device knows, or one. Per-database
+   *  failures are collected, so one bad database does not stop the
+   *  others. */
+  async pullDbs(only, check, errors) {
+    const dbs = only !== null ? [only] : [...this.schemas.keys()];
+    if (dbs.length === 0) return;
+    const P = this.options.prefix;
+    let listing;
+    if (only !== null) {
+      const shards = await this.deps.remote.list(this.dbPrefix(only));
+      this.rememberListing(this.dbPrefix(only), shards);
+      listing = [...shards, ...await this.deps.remote.list(this.journalPrefix(only))];
+    } else {
+      listing = await this.deps.remote.list(P + "/");
+      this.rememberListing(P + "/", listing);
+    }
+    const shardsByDb = /* @__PURE__ */ new Map();
+    const journalsByDb = /* @__PURE__ */ new Map();
+    for (const e of listing) {
+      const s = this.parseShardPath(e.path);
+      if (s) {
+        let m = shardsByDb.get(s.db);
+        if (!m) shardsByDb.set(s.db, m = /* @__PURE__ */ new Map());
+        m.set(e.path, { store: s.store, n: s.n, etag: e.etag });
+        continue;
+      }
+      const j = this.parseJournalPath(e.path);
+      if (j) {
+        let m = journalsByDb.get(j.db);
+        if (!m) journalsByDb.set(j.db, m = /* @__PURE__ */ new Map());
+        m.set(e.path, e.etag);
+      }
+    }
+    for (const db of dbs) {
+      try {
+        await this.pullDb(db, shardsByDb.get(db) ?? /* @__PURE__ */ new Map(), journalsByDb.get(db) ?? /* @__PURE__ */ new Map(), check);
+        if (!this.pulled.has(db)) {
+          this.pulled.add(db);
+          await this.log.setMeta({ ["pulled:" + db]: 1 });
+        }
+      } catch (e) {
+        if (e instanceof UserChangedError) throw e;
+        errors.push(e);
+      }
+    }
+  }
+  async pullDb(db, shardEntries, journalEntries, check) {
+    const schema = this.schemas.get(db);
+    if (!schema) return;
+    const want = (store) => schema.has(store) && !this.storeExcluded(db, store);
+    const views = /* @__PURE__ */ new Map();
+    const marks = /* @__PURE__ */ new Map();
+    const setView = (store, n, v) => {
+      let m = views.get(store);
+      if (!m) views.set(store, m = /* @__PURE__ */ new Map());
+      m.set(n, v);
+    };
+    let fetched = false;
+    const limit = limiter(PUSH_CONCURRENCY);
+    const load = async (store, n, etag) => {
+      const path = this.shardPath(db, store, n);
+      const cached = this.shardCache.get(path);
+      if (cached && cached.etag === etag) {
+        setView(store, n, copyShard(cached.shard));
+        marks.set(path, etag);
+        return;
+      }
+      fetched = true;
+      const t0 = Date.now();
+      const r = await this.deps.remote.getJSON(path, etag === "?" ? cached?.etag : void 0);
+      if (r.status !== "corrupt" && r.serverTime) this.clock.observe(r.serverTime, t0, Date.now());
+      if (r.status === "ok") {
+        const shard = toShard(r.value);
+        this.cacheShard(path, r.etag, copyShard(shard));
+        setView(store, n, shard);
+        marks.set(path, r.etag);
+      } else if (r.status === "unchanged" && cached) {
+        setView(store, n, copyShard(cached.shard));
+        marks.set(path, cached.etag);
+      } else if (r.status === "corrupt") {
+        console.warn("[runapps sync] unreadable shard, its records will be uploaded again:", path);
+        if (r.etag) this.cacheShard(path, r.etag, emptyShard());
+        setView(store, n, null);
+        marks.set(path, "");
+      } else {
+        setView(store, n, this.etags.has(path) ? null : emptyShard());
+        marks.set(path, "");
+      }
+    };
+    const legacy = await this.legacyEtags();
+    const seeds = /* @__PURE__ */ new Set();
+    const reads = [];
+    for (const [path, e] of shardEntries) {
+      if (!want(e.store) || e.n >= this.options.shards) continue;
+      if (this.etags.get(path) === e.etag) continue;
+      if (!this.etags.has(path) && legacy.get(path) === e.etag) seeds.add(e.store + "\0" + e.n);
+      reads.push(limit(() => load(e.store, e.n, e.etag)));
+    }
+    await Promise.all(reads);
+    for (const path of this.etags.keys()) {
+      if (shardEntries.has(path)) continue;
+      const p = this.parseShardPath(path);
+      if (!p || p.db !== db || !want(p.store) || views.get(p.store)?.has(p.n)) continue;
+      setView(p.store, p.n, null);
+      marks.set(path, "");
+    }
+    const jPrefix = this.journalPrefix(db);
+    const jv = await this.log.metaWithPrefix("jv:" + jPrefix);
+    const loaded = /* @__PURE__ */ new Map();
+    let jList = journalEntries;
+    for (let round = 0; round < 3; round++) {
+      if (fetched) {
+        fetched = false;
+        jList = new Map((await this.deps.remote.list(jPrefix)).map((e) => [e.path, e.etag]));
+      }
+      const fresh = [...jList.keys()].filter((p) => !jv.has("jv:" + p) && !loaded.has(p));
+      if (fresh.length === 0) break;
+      for (const p of fresh) {
+        let j = this.journalCache.get(p) ?? null;
+        if (!j) {
+          const r = await this.deps.remote.getJSON(p);
+          if (r.status !== "ok") continue;
+          j = toJournal(r.value);
+          if (!j) continue;
+          this.journalCache.set(p, j);
+        }
+        loaded.set(p, j);
+      }
+      const more = [];
+      for (const j of loaded.values()) {
+        for (const [store, part] of Object.entries(j.s)) {
+          if (!want(store)) continue;
+          for (const n of part.n) {
+            if (n >= this.options.shards || views.get(store)?.has(n)) continue;
+            setView(store, n, emptyShard());
+            more.push(limit(() => load(store, n, shardEntries.get(this.shardPath(db, store, n))?.etag ?? "?")));
+          }
+        }
+      }
+      await Promise.all(more);
+      if (!fetched) break;
+    }
+    const jvNow = {};
+    const toFold = [];
+    const sorted = [...loaded.entries()].sort((a, b) => a[1].t - b[1].t || (a[1].id < b[1].id ? -1 : 1));
+    for (const [p, j] of sorted) {
+      let changed = false;
+      let complete = true;
+      for (const [store, part] of Object.entries(j.s)) {
+        if (!want(store)) {
+          complete = false;
+          continue;
+        }
+        for (const n of part.n) {
+          const view = views.get(store)?.get(n);
+          if (view === void 0) {
+            complete = false;
+            continue;
+          }
+          if (view === null) {
+            changed = true;
+            continue;
+          }
+          const before = JSON.stringify(view);
+          mergeInto(view, part.c ?? 0, this.journalOps(part.o, n));
+          if (JSON.stringify(view) !== before) {
+            changed = true;
+            seeds.delete(store + "\0" + n);
+          }
+        }
+      }
+      if (!changed && complete) jvNow["jv:" + p] = Date.now();
+      else if (changed && this.clock.wall() - j.t > this.options.journalFoldAfterMs) toFold.push([p, j]);
+    }
+    if (views.size > 0) {
+      check();
+      await this.applyDb(db, { views, marks, seeds }, check);
+    }
+    if (Object.keys(jvNow).length) await this.log.setMeta(jvNow);
+    for (const [p, j] of toFold) await this.foldJournal(db, p, j, check);
+    const keepMs = this.options.journalKeepMs;
+    const drop = {};
+    for (const [k, at] of jv) {
+      const p = k.slice(3);
+      if (!jList.has(p)) {
+        drop[k] = void 0;
+        this.journalCache.delete(p);
+      } else if (Date.now() - at > keepMs) {
+        check();
+        await this.deps.remote.remove(p);
+        drop[k] = void 0;
+        this.journalCache.delete(p);
+      }
+    }
+    if (Object.keys(drop).length) await this.log.setMeta(drop);
+  }
+  journalOps(o, n) {
+    const out = [];
+    for (const op of o) {
+      if (!Array.isArray(op) || typeof op[0] !== "string" || !validRec(op[1])) continue;
+      if (this.shardOf(op[0]) !== n) continue;
+      out.push({ kid: op[0], rec: op[1], changed: Array.isArray(op[2]) ? op[2] : void 0 });
+    }
+    return out;
+  }
+  async foldJournal(db, path, j, check) {
+    const limit = limiter(PUSH_CONCURRENCY);
+    const tasks = [];
+    for (const [store, part] of Object.entries(j.s)) {
+      for (const n of part.n) {
+        if (n >= this.options.shards) continue;
+        tasks.push(
+          limit(async () => {
+            const res = await this.writeShard(this.shardPath(db, store, n), part.c ?? 0, this.journalOps(part.o, n), check);
+            await this.applyWritten(db, store, n, res, void 0, void 0, check);
+          })
+        );
+      }
+    }
+    await Promise.all(tasks);
+    await this.log.setMeta({ ["jv:" + path]: Date.now() });
+  }
   // ── Records sync has never seen ──────────────────────────────────
   /**
    * Records already in the app's database before sync saw them — written
    * before the SDK loaded, or before the app used sync at all — are in no
    * log, so nothing would ever push them and they would stay on this
    * device. Once per store, every local record the cloud has no entry for
-   * (not even a deletion) goes into the log stamped older than any real
-   * write: the ordinary push adds it, and an edit made elsewhere still
-   * wins. Records the cloud has are left alone (the pull has applied the
-   * cloud's version), so nothing already there is uploaded again.
-   * Runs after the pull and after ensureOwner, which has emptied the
-   * stores if another user's rows were here. Returns whether it logged
-   * anything.
+   * goes into the log stamped older than any real write: the ordinary
+   * push adds it, and an edit made elsewhere still wins. Records the
+   * cloud has are left alone (the pull has applied the cloud's version).
    */
-  async adoptLocal() {
+  async adoptScan(check) {
     const done2 = new Set((await this.log.metaWithPrefix("adopted:")).keys());
-    let pendingKids = null;
-    let added = false;
     for (const db of this.openedHere) {
       const schema = this.schemas.get(db);
       if (!schema) continue;
+      const scan = /* @__PURE__ */ new Set();
       for (const store of schema.keys()) {
-        const flag = `adopted:${db}/${store}`;
-        if (done2.has(flag) || this.storeExcluded(db, store)) continue;
-        if (!pendingKids) {
-          pendingKids = new Set((await this.log.pending()).map((op) => op.db + "\0" + op.store + "\0" + op.kid));
-        }
-        const known = await this.cloudKeys(db, store);
-        const ops = [];
-        const seen = pendingKids;
-        await this.withStore(db, store, "readonly", (st) => {
-          const cur = st.openCursor();
-          cur.onsuccess = () => {
-            const c = cur.result;
-            if (!c) return;
-            const kid = keyId(c.primaryKey);
-            if (!known.has(kid) && !seen.has(db + "\0" + store + "\0" + kid)) {
-              ops.push({ db, store, kind: "put", kid, key: encodeKey(c.primaryKey), value: c.value, ts: ADOPTED_TS });
-            }
-            c.continue();
-          };
-        });
-        if (ops.length > 0) {
-          this.enqueueLog(ops);
-          added = true;
-        }
-        await this.logChain;
-        await this.log.setMeta({ [flag]: Date.now() });
+        if (!done2.has(`adopted:${db}/${store}`) && !this.storeExcluded(db, store)) scan.add(store);
       }
+      if (scan.size === 0) continue;
+      const complete = await this.applyDb(db, { views: /* @__PURE__ */ new Map(), marks: /* @__PURE__ */ new Map(), scan }, check);
+      const flags = {};
+      for (const store of complete) flags[`adopted:${db}/${store}`] = Date.now();
+      if (Object.keys(flags).length) await this.log.setMeta(flags);
     }
-    return added;
   }
-  /** Every key the cloud copy of a store has an entry for, deletions
-   *  included. Reads the shards the cache does not hold as they are now;
-   *  what it reads is cached for the push but not marked applied, so the
-   *  next pull still applies it. */
-  async cloudKeys(db, store) {
-    const keys = /* @__PURE__ */ new Set();
-    for (let n = 0; n < this.options.shards; n++) {
-      const path = this.shardPath(db, store, n);
-      if (this.knownAbsent(path)) continue;
-      const cached = this.shardCache.get(path);
-      let shard;
-      if (cached && cached.etag === this.etags.get(path)) {
-        shard = cached.shard;
-      } else {
-        const r = await this.deps.remote.getJSON(path);
-        if (r.status === "ok") {
-          const s = r.value;
-          shard = { v: 1, cleared: s?.cleared ?? 0, r: s?.r ?? {} };
-          if (r.etag === this.etags.get(path)) this.cacheShard(path, r.etag, copyShard(shard));
-        }
-      }
-      for (const kid of Object.keys(shard?.r ?? {})) keys.add(kid);
-    }
-    return keys;
+  // ── Apply ────────────────────────────────────────────────────────
+  /** Pending ops, re-read only when some tab logged something since. */
+  async pendingOps() {
+    const seq = this.readSeq();
+    if (this.pendingCache && this.pendingCache.seq === seq) return this.pendingCache.ops;
+    const ops = await this.log.pending();
+    this.pendingCache = { seq, ops };
+    return ops;
   }
-  // ── Pull ─────────────────────────────────────────────────────────
-  async pull() {
-    const prefix = this.options.prefix + "/";
-    const listing = await this.deps.remote.list(prefix);
-    this.rememberListing(prefix, listing);
-    await this.applyListing(listing);
-  }
-  async pullDatabase(name) {
-    if (!this.deps.userId()) return;
-    await this.loadMeta();
-    const prefix = `${this.options.prefix}/${pathSeg(name)}/`;
-    const listing = await this.deps.remote.list(prefix);
-    this.rememberListing(prefix, listing);
-    await this.applyListing(listing);
-  }
-  async applyListing(listing) {
-    const re = new RegExp("^" + this.options.prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "/([^/]+)/([^/]+)/(\\d+)\\.json$");
-    const pending = await this.log.pending();
-    const etagUpdates = {};
-    for (const entry of listing) {
-      const m = re.exec(entry.path);
-      if (!m) continue;
-      const db = decodeURIComponent(m[1]);
-      const store = decodeURIComponent(m[2]);
-      if (this.etags.get(entry.path) === entry.etag) continue;
-      if (this.storeExcluded(db, store)) continue;
-      const schema = this.schemas.get(db);
-      if (!schema || !schema.has(store)) continue;
-      const r = await this.deps.remote.getJSON(entry.path, this.etags.get(entry.path));
-      if (r.status === "unchanged") {
-        continue;
-      }
-      if (r.status === "missing") {
-        this.etags.delete(entry.path);
-        etagUpdates["etag:" + entry.path] = void 0;
-        continue;
-      }
-      const s = r.value;
-      const shard = { v: 1, cleared: s?.cleared ?? 0, r: s?.r ?? {} };
-      this.cacheShard(entry.path, r.etag, copyShard(shard));
-      await this.applyShard(db, store, shard, pending);
-      this.etags.set(entry.path, r.etag);
-      etagUpdates["etag:" + entry.path] = r.etag;
-    }
-    if (Object.keys(etagUpdates).length) await this.log.setMeta(etagUpdates);
-  }
-  async applyShard(db, store, shard, pending) {
-    const localNewer = /* @__PURE__ */ new Map();
-    let localClear = 0;
+  buildGuard(db, pending, userId) {
+    const g = { kid: /* @__PURE__ */ new Map(), store: /* @__PURE__ */ new Map(), db: 0 };
+    const add = (store, kid, kind, t) => {
+      if (kind === "dbclear" || store === "*") g.db = Math.max(g.db, t);
+      else if (kind === "clear" || kid === "*" || kid === "?") g.store.set(store, Math.max(g.store.get(store) ?? 0, t));
+      else g.kid.set(store + "\0" + kid, Math.max(g.kid.get(store + "\0" + kid) ?? 0, t));
+    };
     for (const op of pending) {
-      if (op.db !== db || op.store !== store) continue;
-      if (op.kind === "clear") localClear = Math.max(localClear, op.ts);
-      else localNewer.set(op.kid, Math.max(localNewer.get(op.kid) ?? 0, op.ts));
+      if (op.db !== db) continue;
+      add(op.store, op.kid, op.kind, op.weak ? ADOPTED_TS : op.ts);
     }
-    const clearKey = `cleared:${db}/${store}`;
-    const appliedClear = await this.log.getMeta(clearKey) ?? 0;
-    const schema = this.schemas.get(db)?.get(store);
+    for (const entries of this.readWal().values()) {
+      for (const [d, store, kid, ts, , owner] of entries) {
+        if (d !== db || owner !== null && owner !== userId) continue;
+        add(store, kid, "", ts);
+      }
+    }
+    for (const entries of this.walBatches.values()) {
+      for (const [d, store, kid, ts] of entries) if (d === db) add(store, kid, "", ts);
+    }
+    return g;
+  }
+  /**
+   * Bring the app's database in line with shards as read (or as just
+   * written), record by record:
+   *  - a record newer than the version held here is written (or, for a
+   *    deletion, deleted), unless a local write newer than it is on its
+   *    way to the cloud;
+   *  - a record held here that its shard no longer has (a clear, a
+   *    deletion whose tombstone has expired) is deleted;
+   *  - a local record the cloud has never had is logged for upload.
+   * A record that cannot be stored (a key that does not fit the store, a
+   * unique index) is skipped and retried, never stalling the rest.
+   * Returns the scanned stores whose scan was complete.
+   */
+  async applyDb(db, input, check) {
+    const schema = this.schemas.get(db);
+    const scanned = /* @__PURE__ */ new Set();
+    if (!schema) return scanned;
+    const stores = /* @__PURE__ */ new Set();
+    for (const s of input.views.keys()) if (schema.has(s) && !this.storeExcluded(db, s)) stores.add(s);
+    for (const s of input.scan ?? []) if (schema.has(s) && !this.storeExcluded(db, s)) stores.add(s);
+    if (stores.size === 0) return scanned;
+    check();
+    const h = await this.conn(db);
+    if (!h) return scanned;
+    const present = [...stores].filter((s) => h.objectStoreNames.contains(s));
+    if (present.length === 0) return scanned;
+    const applied = /* @__PURE__ */ new Map();
+    for (const s of present) applied.set(s, await this.log.appliedFor(db, s));
+    const dead = await this.log.deadKeys();
+    const decoded = /* @__PURE__ */ new Map();
+    for (const store of present) {
+      const own = input.own?.get(store);
+      for (const [n, view] of input.views.get(store) ?? []) {
+        if (!view) continue;
+        const seed = input.seeds?.has(store + "\0" + n) ?? false;
+        for (const [kid, rec] of Object.entries(view.r)) {
+          if (!validRec(rec) || this.shardOf(kid) !== n) continue;
+          if (rec.t > ADOPTED_TS) this.clock.witness(rec.t);
+          if (seed) continue;
+          if (rec.d || own?.get(kid) === rec || !newer(rec, applied.get(store).get(kid))) continue;
+          try {
+            decoded.set(store + "\0" + kid, {
+              ok: true,
+              value: await decodeValue(rec.v, (ref) => this.deps.remote.getBlob(ref.ref))
+            });
+          } catch (e) {
+            console.warn(`[runapps sync] cannot read ${db}/${store} record, will retry:`, e instanceof Error ? e.message : e);
+            decoded.set(store + "\0" + kid, { ok: false });
+          }
+        }
+      }
+    }
+    const userId = this.deps.userId();
+    let out = "retry";
+    for (let attempt = 0; out === "retry"; attempt++) {
+      const seq0 = this.readSeq();
+      const pending = (await this.pendingOps()).filter(
+        (op) => op.db === db && (op.owner == null || op.owner === userId) && !(op.id !== void 0 && input.settling?.has(op.id))
+      );
+      check();
+      out = await this.applyTx(h, db, present, input, applied, decoded, pending, userId, dead, attempt < 5 ? seq0 : void 0);
+    }
+    const etagSet = /* @__PURE__ */ new Map();
+    for (const [path, etag] of input.marks) {
+      const p = this.parseShardPath(path);
+      if (!p || !present.includes(p.store)) continue;
+      if (etag === "") {
+        etagSet.set(path, void 0);
+        continue;
+      }
+      const failures = out.failures.get(path) ?? 0;
+      const tries = (this.applyFailures.get(path) ?? 0) + 1;
+      if (failures === 0 || tries >= MAX_APPLY_ATTEMPTS) {
+        if (failures) console.warn(`[runapps sync] ${failures} record(s) of ${path} could not be stored here; giving up on them`);
+        this.applyFailures.delete(path);
+        etagSet.set(path, etag);
+      } else {
+        this.applyFailures.set(path, tries);
+      }
+    }
+    await this.log.commitApply(db, out.applied, etagSet);
+    for (const [path, etag] of etagSet) {
+      if (etag === void 0) this.etags.delete(path);
+      else this.etags.set(path, etag);
+    }
+    if (out.adopted.length) {
+      await this.log.append(out.adopted);
+      this.pendingCache = null;
+      this.adoptedAny = true;
+    }
+    for (const [store, keys] of out.keys) {
+      if (keys.length) this.emitChange({ db, store, keys, cleared: false, source: "remote" });
+    }
+    for (const s of out.scanned) scanned.add(s);
+    return scanned;
+  }
+  applyTx(h, db, present, input, applied, decoded, pending, userId, dead, seq0) {
+    return new Promise((resolve, reject) => {
+      let tx;
+      try {
+        tx = h.transaction(present, "readwrite");
+      } catch (e) {
+        reject(e);
+        return;
+      }
+      const out = { applied: /* @__PURE__ */ new Map(), keys: /* @__PURE__ */ new Map(), failures: /* @__PURE__ */ new Map(), adopted: [], scanned: /* @__PURE__ */ new Set() };
+      let retry = false;
+      tx.oncomplete = () => resolve(retry ? "retry" : out);
+      tx.onabort = () => retry ? resolve("retry") : reject(tx.error ?? new Error("apply aborted"));
+      const localKeys = /* @__PURE__ */ new Map();
+      let left = present.length;
+      for (const store of present) {
+        const r = tx.objectStore(store).getAllKeys();
+        r.onsuccess = () => {
+          const m = /* @__PURE__ */ new Map();
+          for (const k of r.result) m.set(keyId(k), k);
+          localKeys.set(store, m);
+          if (--left === 0) phase2();
+        };
+      }
+      const phase2 = () => {
+        if (seq0 !== void 0 && this.readSeq() !== seq0) {
+          retry = true;
+          tx.abort();
+          return;
+        }
+        const guard = this.buildGuard(db, pending, userId);
+        for (const store of present) {
+          this.applyStore(tx.objectStore(store), db, store, input, applied.get(store), decoded, localKeys.get(store), guard, userId, dead, out);
+        }
+      };
+    });
+  }
+  applyStore(st, db, store, input, appliedS, decoded, localKeys, guard, userId, dead, out) {
+    const keyPath = st.keyPath;
+    const upd = /* @__PURE__ */ new Map();
+    out.applied.set(store, upd);
     const keys = [];
-    let clearedLocally = false;
-    await this.withStore(db, store, "readwrite", (st) => {
-      if (shard.cleared > appliedClear && shard.cleared > localClear) {
-        st.clear();
-        clearedLocally = true;
+    out.keys.set(store, keys);
+    const viewMap = input.views.get(store) ?? /* @__PURE__ */ new Map();
+    const own = input.own?.get(store);
+    const kidTs = (kid) => guard.kid.get(store + "\0" + kid) ?? 0;
+    const clearTs = Math.max(guard.store.get(store) ?? 0, guard.db);
+    const fail = (n) => {
+      const p = this.shardPath(db, store, n);
+      out.failures.set(p, (out.failures.get(p) ?? 0) + 1);
+    };
+    const guarded = (cb, onok, onerr) => {
+      try {
+        const r = cb();
+        r.onsuccess = () => onok(r.result);
+        r.onerror = (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          onerr();
+        };
+      } catch {
+        onerr();
       }
-      for (const kid of Object.keys(shard.r)) {
-        const rec = shard.r[kid];
-        if ((localNewer.get(kid) ?? 0) >= rec.t) continue;
-        if (rec.t <= localClear) continue;
-        const key = decodeKey(rec.k);
-        keys.push(key);
+    };
+    const removeLocal = (kid, n) => {
+      const key = localKeys.get(kid);
+      if (key === void 0) {
+        if (appliedS.has(kid)) upd.set(kid, void 0);
+        return;
+      }
+      guarded(
+        () => st.delete(key),
+        () => {
+          keys.push(key);
+          upd.set(kid, void 0);
+        },
+        () => fail(n)
+      );
+    };
+    const handled = /* @__PURE__ */ new Set();
+    const adopt = (kid, key, ts) => {
+      if (dead.has(db + "\0" + store + "\0" + kid)) return;
+      guarded(
+        () => st.get(key),
+        (value) => {
+          if (value !== void 0) out.adopted.push({ db, store, kind: "put", kid, key: encodeKey(key), value, ts, owner: userId });
+        },
+        () => {
+        }
+      );
+    };
+    const wall = this.clock.wall();
+    const isSeed = (n) => input.seeds?.has(store + "\0" + n) ?? false;
+    for (const [n, view] of viewMap) {
+      if (view && isSeed(n)) {
+        for (const [kid, rec] of Object.entries(view.r)) {
+          if (!validRec(rec) || this.shardOf(kid) !== n) continue;
+          handled.add(kid);
+          if (!rec.d && newer(rec, appliedS.get(kid))) upd.set(kid, { t: rec.t, s: n, h: recHash(rec) });
+        }
+        continue;
+      }
+      if (view === null) {
+        for (const [kid, a] of appliedS) if (a.s === n) upd.set(kid, void 0);
+        continue;
+      }
+      for (const [kid, rec] of Object.entries(view.r)) {
+        if (!validRec(rec) || this.shardOf(kid) !== n) continue;
+        handled.add(kid);
+        const a = appliedS.get(kid);
+        if (!newer(rec, a)) continue;
+        if (kidTs(kid) > rec.t || clearTs >= rec.t) continue;
+        const entry = { t: rec.t, s: n, h: recHash(rec) };
         if (rec.d) {
-          st.delete(key);
-        } else {
-          const value = rec._decoded;
-          if (schema && schema.keyPath !== null) st.put(value);
-          else st.put(value, key);
+          removeLocal(kid, n);
+          continue;
         }
-      }
-      if (clearedLocally) {
-        for (const op of pending) {
-          if (op.db !== db || op.store !== store || op.kind !== "put" || op.ts <= shard.cleared) continue;
-          if (schema && schema.keyPath !== null) st.put(op.value);
-          else st.put(op.value, decodeKey(op.key));
+        if (own?.get(kid) === rec && localKeys.has(kid)) {
+          upd.set(kid, entry);
+          continue;
         }
-      }
-    }, async () => {
-      for (const kid of Object.keys(shard.r)) {
-        const rec = shard.r[kid];
-        if (rec.d || (localNewer.get(kid) ?? 0) >= rec.t || rec.t <= localClear) continue;
-        rec._decoded = await decodeValue(
-          rec.v,
-          (ref) => this.deps.remote.getBlob(ref.ref)
+        const d = decoded.get(store + "\0" + kid);
+        if (!d || !d.ok) {
+          fail(n);
+          continue;
+        }
+        let key;
+        try {
+          key = decodeKey(rec.k);
+        } catch {
+          upd.set(kid, entry);
+          continue;
+        }
+        const value = d.value;
+        if (keyPath !== null) {
+          const inline = extractKey(value, keyPath);
+          if (inline === void 0) {
+            if (!(typeof keyPath === "string" && keyPath !== "" && injectKey(value, keyPath, key))) {
+              console.warn(`[runapps sync] ${db}/${store}: a record without its key was skipped`);
+              upd.set(kid, entry);
+              continue;
+            }
+          } else if (keyId(inline) !== kid) {
+            console.warn(`[runapps sync] ${db}/${store}: a record whose key does not match was skipped`);
+            upd.set(kid, entry);
+            continue;
+          }
+        }
+        guarded(
+          () => keyPath !== null ? st.put(value) : st.put(value, key),
+          () => {
+            keys.push(key);
+            upd.set(kid, entry);
+          },
+          () => fail(n)
         );
       }
-    });
-    if (shard.cleared > appliedClear) await this.log.setMeta({ [clearKey]: shard.cleared });
-    if (keys.length > 0 || clearedLocally) {
-      this.emitChange({ db, store, keys, cleared: clearedLocally, source: "remote" });
+      for (const [kid, a] of appliedS) {
+        if (a.s !== n || handled.has(kid)) continue;
+        if (kidTs(kid) > 0) continue;
+        if (a.t <= view.cleared || wall - a.t > TOMBSTONE_TTL_MS) {
+          removeLocal(kid, n);
+          continue;
+        }
+        upd.set(kid, void 0);
+        const key = localKeys.get(kid);
+        if (key !== void 0) adopt(kid, key, a.t);
+      }
     }
+    const scan = input.scan?.has(store) ?? false;
+    let scanComplete = true;
+    for (const [kid, key] of localKeys) {
+      if (handled.has(kid)) continue;
+      const n = this.shardOf(kid);
+      const view = viewMap.get(n);
+      const a = appliedS.get(kid);
+      if (a && !(view === null && a.s === n)) continue;
+      if (kidTs(kid) > 0 || clearTs > 0) continue;
+      if (view && isSeed(n)) continue;
+      if (view === void 0) {
+        if (!scan) continue;
+        const path = this.shardPath(db, store, n);
+        if (!this.etags.has(path) && !this.knownAbsent(path)) {
+          scanComplete = false;
+          continue;
+        }
+      }
+      adopt(kid, key, view ? Math.max(ADOPTED_TS, view.cleared + 1e-3) : ADOPTED_TS);
+    }
+    if (scan && scanComplete) out.scanned.add(store);
   }
   emitChange(change) {
     this.moved = true;
     this.deps.events.emit("db:change", change);
-    try {
-      this.post(change);
-    } catch {
-    }
+    this.post(change);
   }
   // ── The engine's own connections ─────────────────────────────────
+  /** A connection to an app database; null when it does not exist (the
+   *  engine never creates one). */
   conn(db) {
     let p = this.conns.get(db);
     if (!p) {
-      p = new Promise((resolve, reject) => {
+      const pr = new Promise((resolve, reject) => {
         const open = this.hook ? this.hook.originalOpen : (n) => indexedDB.open(n);
         const r = open(db);
+        let created = false;
+        r.onupgradeneeded = () => {
+          created = true;
+          r.transaction?.abort();
+        };
         r.onsuccess = () => {
           const h = r.result;
+          this.hook?.markInternal(h);
           h.onversionchange = () => {
             h.close();
-            this.conns.delete(db);
+            if (this.conns.get(db) === pr) this.conns.delete(db);
           };
           resolve(h);
         };
-        r.onerror = () => reject(r.error ?? new Error(`cannot open ${db}`));
+        r.onerror = (e) => {
+          if (created) {
+            e.preventDefault();
+            resolve(null);
+          } else {
+            reject(r.error ?? new Error(`cannot open ${db}`));
+          }
+        };
         r.onblocked = () => reject(new Error(`open of ${db} blocked`));
       });
-      this.conns.set(db, p);
-      p.catch(() => this.conns.delete(db));
+      p = pr;
+      this.conns.set(db, pr);
+      pr.then(
+        (h) => {
+          if (!h && this.conns.get(db) === pr) this.conns.delete(db);
+        },
+        () => {
+          if (this.conns.get(db) === pr) this.conns.delete(db);
+        }
+      );
     }
     return p;
   }
-  async withStore(db, store, mode, fn, prepare) {
-    if (prepare) await prepare();
+  /** Run `fn` on one store; false when the database or store does not
+   *  exist. */
+  async withStore(db, store, mode, fn) {
     const h = await this.conn(db);
-    if (!h.objectStoreNames.contains(store)) return;
+    if (!h || !h.objectStoreNames.contains(store)) return false;
     const tx = h.transaction(store, mode);
     fn(tx.objectStore(store));
     await done(tx);
+    return true;
   }
 };
 function copyShard(shard) {
@@ -6319,19 +7646,20 @@ var FilesRemote = class {
       r = await this.files.readJSON(path, ifNoneMatch ? { ifNoneMatch } : void 0);
     } catch (e) {
       if (e instanceof SyntaxError) {
-        console.warn("[runapps sync] unreadable shard, will be rewritten", path);
+        console.warn("[runapps sync] unreadable file, will be rewritten", path);
         try {
-          const st = await this.files.stat(path);
-          return { status: "ok", value: null, etag: st.etag ?? "", serverTime: st.last_modified ? Date.parse(st.last_modified) : void 0 };
+          const st2 = await this.files.stat(path);
+          return { status: "corrupt", etag: st2.etag ?? "" };
         } catch {
           return { status: "missing" };
         }
       }
       throw e;
     }
-    if (r.notModified) return { status: "unchanged" };
-    if (r.value === void 0) return { status: "missing" };
-    return { status: "ok", value: r.value, etag: r.etag ?? "" };
+    const st = r.serverTime !== void 0 ? { serverTime: r.serverTime } : {};
+    if (r.notModified) return { status: "unchanged", ...st };
+    if (r.value === void 0) return { status: "missing", ...st };
+    return { status: "ok", value: r.value, etag: r.etag ?? "", ...st };
   }
   async putJSON(path, value, cond, opts) {
     const body = JSON.stringify(value);
@@ -6348,6 +7676,13 @@ var FilesRemote = class {
       const code = e.statusCode;
       if (code === 412 || code === 409) return { status: "conflict" };
       throw e;
+    }
+  }
+  async remove(path) {
+    try {
+      await this.files.del(path);
+    } catch (e) {
+      if (e.statusCode !== 404) throw e;
     }
   }
   async putBlob(path, blob) {
@@ -6399,7 +7734,8 @@ var RunApps = class {
     __publicField(this, "auth", null);
     /**
      * RunApps Sync (see `ClientOptions.sync`), or null when it
-     * is off. `status()` gives the state the badge shows; `now()` pushes
+     * is off. `status()` gives the state the badge shows; `ready()`
+     * resolves once the first sync has run; `now()` pushes
      * and pulls immediately; `client.events.on("db:change", …)` tells the
      * app which store received remote changes so it can re-read.
      */
@@ -6482,7 +7818,7 @@ var RunApps = class {
           remote: new FilesRemote(new FilesService(transport, options.project, void 0, options.filesBase)),
           events: this.events,
           userId: () => auth.ownerId(),
-          onAuthChange: (cb) => auth.onTokenChange(() => cb())
+          onAuthChange: (cb) => auth.onIdentityChange(cb)
         },
         typeof wantSync === "object" ? wantSync : {}
       );

@@ -26,6 +26,13 @@ const BIN_CTORS = {
     BigUint64Array: (b) => new BigUint64Array(b),
     DataView: (b) => new DataView(b),
 };
+// Newer engines store Float16Array in IndexedDB too.
+const F16 = globalThis.Float16Array;
+if (F16)
+    BIN_CTORS.Float16Array = (b) => new F16(b);
+const ERROR_CTORS = {
+    Error, EvalError, RangeError, ReferenceError, SyntaxError, TypeError, URIError,
+};
 function bytesToBase64(bytes) {
     let s = "";
     for (let i = 0; i < bytes.length; i += 0x8000) {
@@ -51,6 +58,12 @@ function isPlainObject(v) {
  * because Blobs have to be read.
  */
 export async function encodeValue(value, sink) {
+    return encodeInner(value, sink, new WeakSet());
+}
+function toStringTag(v) {
+    return Object.prototype.toString.call(v).slice(8, -1);
+}
+async function encodeInner(value, sink, path) {
     if (value === undefined)
         return { [TAG]: "undef" };
     if (value === null)
@@ -75,6 +88,9 @@ export async function encodeValue(value, sink) {
         case "symbol":
             throw new TypeError(`runapps sync: ${typeof value} values cannot be stored`);
     }
+    const obj = value;
+    if (path.has(obj))
+        throw new TypeError("runapps sync: a value that contains itself cannot be synced");
     if (value instanceof Date) {
         const t = value.getTime();
         return { [TAG]: "date", v: Number.isNaN(t) ? "invalid" : t };
@@ -93,6 +109,31 @@ export async function encodeValue(value, sink) {
         }
         return out;
     }
+    if (value instanceof Error) {
+        const e = value;
+        path.add(obj);
+        try {
+            const out = { [TAG]: "err", n: ERROR_CTORS[e.name] ? e.name : "Error", m: String(e.message) };
+            if (typeof e.stack === "string")
+                out.st = e.stack;
+            if ("cause" in e)
+                out.c = await encodeInner(e.cause, sink, path);
+            return out;
+        }
+        finally {
+            path.delete(obj);
+        }
+    }
+    if (value instanceof Number || value instanceof String || value instanceof Boolean || (typeof BigInt !== "undefined" && toStringTag(obj) === "BigInt")) {
+        return { [TAG]: "box", v: await encodeInner(value.valueOf(), sink, path) };
+    }
+    if (typeof ImageData !== "undefined" && value instanceof ImageData) {
+        const out = { [TAG]: "img", w: value.width, h: value.height, v: bytesToBase64(new Uint8Array(value.data.buffer, value.data.byteOffset, value.data.byteLength)) };
+        const cs = value.colorSpace;
+        if (cs)
+            out.cs = cs;
+        return out;
+    }
     if (value instanceof ArrayBuffer) {
         return { [TAG]: "bin", c: "ArrayBuffer", v: bytesToBase64(new Uint8Array(value)) };
     }
@@ -103,22 +144,31 @@ export async function encodeValue(value, sink) {
         const bytes = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
         return { [TAG]: "bin", c: name, v: bytesToBase64(bytes) };
     }
+    path.add(obj);
+    try {
+        return await encodeContainer(value, sink, path);
+    }
+    finally {
+        path.delete(obj);
+    }
+}
+async function encodeContainer(value, sink, path) {
     if (value instanceof Map) {
         const v = [];
         for (const [k, x] of value)
-            v.push([await encodeValue(k, sink), await encodeValue(x, sink)]);
+            v.push([await encodeInner(k, sink, path), await encodeInner(x, sink, path)]);
         return { [TAG]: "map", v };
     }
     if (value instanceof Set) {
         const v = [];
         for (const x of value)
-            v.push(await encodeValue(x, sink));
+            v.push(await encodeInner(x, sink, path));
         return { [TAG]: "set", v };
     }
     if (Array.isArray(value)) {
         const out = new Array(value.length);
         for (let i = 0; i < value.length; i++)
-            out[i] = await encodeValue(value[i], sink);
+            out[i] = await encodeInner(value[i], sink, path);
         return out;
     }
     if (isPlainObject(value)) {
@@ -127,15 +177,25 @@ export async function encodeValue(value, sink) {
         const needsWrap = Object.prototype.hasOwnProperty.call(value, TAG);
         const out = {};
         for (const k of Object.keys(value))
-            out[k] = await encodeValue(value[k], sink);
+            defineOwn(out, k, await encodeInner(value[k], sink, path));
         return needsWrap ? { [TAG]: "obj", v: out } : out;
     }
-    // Class instances: structured clone keeps own enumerable properties
-    // only, so do the same.
+    // Platform objects (CryptoKey, FileSystemHandle, FileList, …) are
+    // stored by IndexedDB but have no JSON form: refuse them rather than
+    // syncing an empty object. Instances of the app's own classes have the
+    // tag "Object"; structured clone keeps their own enumerable
+    // properties only, and so does this.
+    const tag = toStringTag(value);
+    if (tag !== "Object" && tag !== "Arguments") {
+        throw new TypeError(`runapps sync: ${tag} values cannot be synced`);
+    }
     const out = {};
     for (const k of Object.keys(value))
-        out[k] = await encodeValue(value[k], sink);
+        defineOwn(out, k, await encodeInner(value[k], sink, path));
     return out;
+}
+function defineOwn(o, k, v) {
+    Object.defineProperty(o, k, { value: v, writable: true, enumerable: true, configurable: true });
 }
 /** Inverse of `encodeValue`. */
 export async function decodeValue(value, source) {
@@ -193,13 +253,34 @@ export async function decodeValue(value, source) {
                 }
                 return blob;
             }
+            case "err": {
+                const C = ERROR_CTORS[t.n] ?? Error;
+                const e = new C(t.m);
+                if (t.st !== undefined)
+                    defineOwn(e, "stack", t.st);
+                if ("c" in t)
+                    defineOwn(e, "cause", await decodeValue(t.c, source));
+                return e;
+            }
+            case "box":
+                return Object(await decodeValue(t.v, source));
+            case "img": {
+                const bytes = base64ToBytes(t.v);
+                const data = new Uint8ClampedArray(new ArrayBuffer(bytes.byteLength));
+                data.set(bytes);
+                if (typeof ImageData === "undefined")
+                    return { width: t.w, height: t.h, data };
+                return new ImageData(data, t.w, t.h, t.cs ? { colorSpace: t.cs } : undefined);
+            }
             case "obj":
                 return decodeValue(t.v, source);
         }
     }
     const out = {};
+    // defineProperty, so an own "__proto__" key stays a key instead of
+    // setting the prototype.
     for (const k of Object.keys(obj))
-        out[k] = await decodeValue(obj[k], source);
+        defineOwn(out, k, await decodeValue(obj[k], source));
     return out;
 }
 // ── Keys ─────────────────────────────────────────────────────────────
@@ -268,9 +349,12 @@ export function hash32(s) {
  * Blob objects count as a change). Used to find which fields a write
  * touched.
  */
-export function deepEqual(a, b) {
+export function deepEqual(a, b, depth = 0) {
     if (Object.is(a, b))
         return true;
+    // A cyclic or absurdly deep value: give up (callers treat it as changed).
+    if (depth > 200)
+        throw new RangeError("runapps sync: value too deep to compare");
     if (a === null || b === null || typeof a !== "object" || typeof b !== "object")
         return false;
     if (a instanceof Date || b instanceof Date) {
@@ -293,7 +377,7 @@ export function deepEqual(a, b) {
         if (!(a instanceof Map && b instanceof Map) || a.size !== b.size)
             return false;
         for (const [k, v] of a)
-            if (!b.has(k) || !deepEqual(v, b.get(k)))
+            if (!b.has(k) || !deepEqual(v, b.get(k), depth + 1))
                 return false;
         return true;
     }
@@ -309,7 +393,7 @@ export function deepEqual(a, b) {
         if (!(Array.isArray(a) && Array.isArray(b)) || a.length !== b.length)
             return false;
         for (let i = 0; i < a.length; i++)
-            if (!deepEqual(a[i], b[i]))
+            if (!deepEqual(a[i], b[i], depth + 1))
                 return false;
         return true;
     }
@@ -320,7 +404,7 @@ export function deepEqual(a, b) {
     for (const k of ka) {
         if (!Object.prototype.hasOwnProperty.call(b, k))
             return false;
-        if (!deepEqual(a[k], b[k]))
+        if (!deepEqual(a[k], b[k], depth + 1))
             return false;
     }
     return true;
@@ -331,13 +415,37 @@ export function changedFields(prior, value) {
     if (!isPlainObject(prior) || !isPlainObject(value))
         return undefined;
     const out = [];
-    for (const k of new Set([...Object.keys(prior), ...Object.keys(value)])) {
-        const inP = Object.prototype.hasOwnProperty.call(prior, k);
-        const inV = Object.prototype.hasOwnProperty.call(value, k);
-        if (inP !== inV || !deepEqual(prior[k], value[k]))
-            out.push(k);
+    try {
+        for (const k of new Set([...Object.keys(prior), ...Object.keys(value)])) {
+            const inP = Object.prototype.hasOwnProperty.call(prior, k);
+            const inV = Object.prototype.hasOwnProperty.call(value, k);
+            if (inP !== inV || !deepEqual(prior[k], value[k]))
+                out.push(k);
+        }
+    }
+    catch {
+        return undefined; // too deep or cyclic: every field counts as changed
     }
     return out;
+}
+/** Write `key` into `value` at an inline keyPath (a.b.c), as IndexedDB
+ *  does for a generated key. False when the path cannot hold it. */
+export function injectKey(value, keyPath, key) {
+    if (value === null || typeof value !== "object")
+        return false;
+    const parts = keyPath.split(".");
+    let cur = value;
+    for (let i = 0; i < parts.length - 1; i++) {
+        const p = parts[i];
+        if (cur[p] === undefined)
+            cur[p] = {};
+        const next = cur[p];
+        if (next === null || typeof next !== "object")
+            return false;
+        cur = next;
+    }
+    cur[parts[parts.length - 1]] = key;
+    return true;
 }
 /** Read an inline key out of a value by IndexedDB keyPath rules. */
 export function extractKey(value, keyPath) {

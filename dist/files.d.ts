@@ -201,6 +201,7 @@ export declare class FilesService {
         value: T | undefined;
         etag?: string;
         notModified?: boolean;
+        serverTime?: number;
     }>;
     /** Stat: HEAD-only object metadata. */
     stat(path: string, init?: {

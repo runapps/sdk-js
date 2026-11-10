@@ -22,7 +22,8 @@ export interface HookOptions {
     /** The app opened an observed database. The open request's success is
      *  held until this resolves (or `openTimeoutMs` passes). */
     onOpen: (db: IDBDatabase, dbName: string) => Promise<void> | void;
-    /** The app deleted an observed database. */
+    /** The app deleted an observed database (called once the delete has
+     *  succeeded; a blocked or failed delete changes nothing). */
     onDeleteDatabase: (dbName: string) => void;
     openTimeoutMs: number;
     /** Only observe this factory's databases. Default: the global one at
@@ -32,6 +33,9 @@ export interface HookOptions {
 export interface InstalledHook {
     /** The factory's untouched open — for the SDK's own databases. */
     originalOpen: (name: string, version?: number) => IDBOpenDBRequest;
+    /** A connection the SDK opened for itself: never observed, even when
+     *  its database is one the app uses. */
+    markInternal(db: IDBDatabase): void;
     uninstall(): void;
 }
 /**
