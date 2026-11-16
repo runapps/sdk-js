@@ -23,10 +23,7 @@ const client = new RunApps({
 
 const tts = await client.realtime.connect({
   model: process.env.RUNAPPS_TTS_MODEL ?? "Doubao TTS 2.0 Streaming",
-  session: {
-    voice: "zh_female_vv_uranus_bigtts",
-    subtitles: true, // a transcript per sentence as it is spoken
-  },
+  session: { voice: "zh_female_vv_uranus_bigtts" },
   maxCost: 0.1,
 });
 

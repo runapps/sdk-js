@@ -63,7 +63,7 @@
       outCtx = new AudioContext({ sampleRate: 24000 });
       tts = await client.realtime.connect({
         model: "Doubao TTS 2.0 Streaming",
-        session: { voice: "zh_female_vv_uranus_bigtts", subtitles: true },
+        session: { voice: "zh_female_vv_uranus_bigtts" },
       });
       tts.on("response.output_audio.delta", (e) => play(RunApps.float32FromPCM16(RunApps.base64ToBytes(e.delta))));
       tts.on("response.output_audio_transcript.delta", (e) => ($("caption").textContent = "🔊 " + e.delta));

@@ -48,13 +48,13 @@ import type { Transport } from "./transport.js";
  * it is still arriving. The model splits sentences itself, so the text
  * can come in pieces of any size. `session.created` carries
  * `session.mode: "tts"`; session fields are `voice`, `speed`, `volume`,
- * `pitch`, `instructions` (how to say it), `language`, `subtitles`, …
+ * `pitch`, `instructions` (how to say it), `language`, …
  *
  *   → input_text.append   {text}   opens a response if none is open
  *   → input_text.commit            the response's text is complete
  *   → response.cancel              stop the open response, drop queued ones
  *   ← response.created / response.output_audio.delta (24 kHz PCM16 mono)
- *   ← response.output_audio_transcript.delta   {delta, words?} the text being spoken
+ *   ← response.output_audio_transcript.delta   {delta, words} each sentence as it is spoken
  *   ← response.done       {response: {id, status, usage: {characters}}}
  *
  * `speak(text | stream)` does the append/commit and resolves with the

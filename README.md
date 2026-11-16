@@ -629,7 +629,7 @@ With a streaming TTS model such as `"Doubao TTS 2.0 Streaming"` the session goes
 ```ts
 const tts = await client.realtime.connect({
   model: "Doubao TTS 2.0 Streaming",
-  session: { voice: "zh_female_vv_uranus_bigtts", subtitles: true }, // also speed, volume, pitch, instructions ("用开心的语气说")
+  session: { voice: "zh_female_vv_uranus_bigtts", speed: 1.2, instructions: "用开心的语气说" }, // all optional
 });
 tts.on("response.output_audio.delta", (e) => play(base64ToBytes(e.delta)));         // 24 kHz PCM16 mono
 tts.on("response.output_audio_transcript.delta", (e) => showCaption(e.delta));       // the sentence being spoken
@@ -643,7 +643,7 @@ await tts.speak("还有别的问题吗？");   // a plain string works too; the 
 const { usage } = await tts.close();
 ```
 
-`speak()` resolves once the reply's audio has all been sent; calls made while one is still speaking queue behind it. `cancelResponse()` stops the reply now (barge-in), drops the queued ones and stops reading the chat stream. To show the text as well, iterate the chat stream yourself and pass each piece to `tts.appendText()`, then `tts.commitText()` at the end. `session.created` reports `session.mode === "tts"`. For a whole text at once, `client.audio.speech()` with `"Doubao TTS 2.0"` is simpler. Runnable examples: [`examples/realtime-tts.html`](examples/realtime-tts.html) (chat reply spoken in the browser as it streams) and [`examples/realtime-tts.mjs`](examples/realtime-tts.mjs) (from Node, saved as WAV).
+`speak()` resolves once the reply's audio has all been sent; calls made while one is still speaking queue behind it. `cancelResponse()` stops the reply now (barge-in), drops the queued ones and stops reading the chat stream. To show the text as well, iterate the chat stream yourself and pass each piece to `tts.appendText()`, then `tts.commitText()` at the end. Japanese and other languages besides Chinese and English need `language` (e.g. `"ja"`) in the session. `session.voice` is also accepted by `"Doubao Realtime Voice"`, so one session object picks the voice for both. `session.created` reports `session.mode === "tts"`. For a whole text at once, `client.audio.speech()` with `"Doubao TTS 2.0"` is simpler. Runnable examples: [`examples/realtime-tts.html`](examples/realtime-tts.html) (chat reply spoken in the browser as it streams) and [`examples/realtime-tts.mjs`](examples/realtime-tts.mjs) (from Node, saved as WAV).
 
 Without the SDK, open a WebSocket to `wss://www.runapps.ai/v1/realtime?model=<name>[&max_cost=<USD>]` with `Authorization: Bearer <key>`, or from a browser with the subprotocols `["realtime", "runapps-key.<key>"]`. The last frame before the server closes is `{"type":"gateway.usage","usage":{…,"total_cost":…}}`.
 
