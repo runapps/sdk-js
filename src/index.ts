@@ -157,6 +157,9 @@ export type {
   RealtimeUsage,
   RealtimeCloseInfo,
   RealtimeConnectOptions,
+  RealtimeSpeech,
+  SpeakSource,
+  SpeakChunk,
   WebSocketLike,
   WebSocketConstructor,
 } from "./realtime.js";

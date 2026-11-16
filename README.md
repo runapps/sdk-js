@@ -622,6 +622,29 @@ const { usage } = await session.close();    // end of audio: the last sentence s
 
 Transcription events follow OpenAI's Realtime API: `delta` is only the newly recognised text, so OpenAI-style code that appends deltas works unchanged; `transcript` on each delta is the sentence so far (the recognizer may revise earlier words: `transcript` shows the revision, while `delta` only ever carries text past what earlier deltas delivered, so appended text keeps up but may hold a few stale characters), and `completed.transcript` is the final sentence (`text` holds the same, for older code). `session.created` reports `session.mode === "transcription"` for these models. For a finished recording, `client.audio.transcribe()` is simpler. Runnable examples: [`examples/realtime-transcribe.html`](examples/realtime-transcribe.html) (live captions from the microphone) and [`examples/realtime-transcribe.mjs`](examples/realtime-transcribe.mjs) (stream a recording from Node).
 
+### Streaming text-to-speech
+
+With a streaming TTS model such as `"Doubao TTS 2.0 Streaming"` the session goes the other way: send text while it is still being written — an LLM's reply, token by token — and the speech starts with the first words. The model finds the sentences itself, so the text can come in pieces of any size. Billed per character.
+
+```ts
+const tts = await client.realtime.connect({
+  model: "Doubao TTS 2.0 Streaming",
+  session: { voice: "zh_female_vv_uranus_bigtts", subtitles: true }, // also speed, volume, pitch, instructions ("用开心的语气说")
+});
+tts.on("response.output_audio.delta", (e) => play(base64ToBytes(e.delta)));         // 24 kHz PCM16 mono
+tts.on("response.output_audio_transcript.delta", (e) => showCaption(e.delta));       // the sentence being spoken
+
+// Speak a chat reply as it streams: speak() reads the chunks' delta.content.
+const reply = await tts.speak(client.chat.stream({ model: "DeepSeek", messages }));
+reply.status;            // "completed", or "cancelled" after tts.cancelResponse()
+reply.usage.characters;  // what this reply was billed for
+
+await tts.speak("还有别的问题吗？");   // a plain string works too; the session stays open between replies
+const { usage } = await tts.close();
+```
+
+`speak()` resolves once the reply's audio has all been sent; calls made while one is still speaking queue behind it. `cancelResponse()` stops the reply now (barge-in), drops the queued ones and stops reading the chat stream. To show the text as well, iterate the chat stream yourself and pass each piece to `tts.appendText()`, then `tts.commitText()` at the end. `session.created` reports `session.mode === "tts"`. For a whole text at once, `client.audio.speech()` with `"Doubao TTS 2.0"` is simpler. Runnable examples: [`examples/realtime-tts.html`](examples/realtime-tts.html) (chat reply spoken in the browser as it streams) and [`examples/realtime-tts.mjs`](examples/realtime-tts.mjs) (from Node, saved as WAV).
+
 Without the SDK, open a WebSocket to `wss://www.runapps.ai/v1/realtime?model=<name>[&max_cost=<USD>]` with `Authorization: Bearer <key>`, or from a browser with the subprotocols `["realtime", "runapps-key.<key>"]`. The last frame before the server closes is `{"type":"gateway.usage","usage":{…,"total_cost":…}}`.
 
 ## HTTP API
@@ -636,7 +659,7 @@ Base URL `https://www.runapps.ai`. Send `Authorization: Bearer <key or app token
 | `POST /v1/images/edits` | Edit an image |
 | `POST /v1/audio/speech` | Text to speech |
 | `POST /v1/audio/transcriptions` | Speech to text (a `file`, or a public `url`) |
-| `GET /v1/realtime` (WebSocket) | Realtime voice session, or streaming speech recognition |
+| `GET /v1/realtime` (WebSocket) | Realtime voice session, streaming speech recognition, or streaming text-to-speech |
 | `GET /v1/audio/voices` | Voices for a speech model |
 | `POST /v1/videos/generations` | Start a video job |
 | `GET /v1/videos/generations/<id>` | Job status |
@@ -706,7 +729,7 @@ Every call takes `{ signal }` for cancellation.
 | `client.files` | `put`, `putString`, `putFromURL`, `get`, `read`, `readJSON`, `stat`, `exists`, `list`, `del`, `deleteMany`, `move`, `copy`, `batch` |
 | `client.image` | `generate`, `edit`, `generateAsync`, `submitGenerate`, `getAsyncStatus` |
 | `client.audio` | `speech`, `speechAsync`, `transcribe`, `transcribeAsync` |
-| `client.realtime` | `connect` → session: `on`, `send`, `appendAudio`, `commitAudio`, `mute`, `unmute`, `say`, `cancelResponse`, `update`, `sendFunctionResult`, `close`, `closed` |
+| `client.realtime` | `connect` → session: `on`, `send`, `appendAudio`, `commitAudio`, `mute`, `unmute`, `say`, `cancelResponse`, `update`, `sendFunctionResult`, `appendText`, `commitText`, `speak`, `close`, `closed` |
 | `client.video` | `generate`, `getStatus`, `wait`, `getContent` |
 | `client.embeddings` | `create` |
 | `client.tools` | `list`, `definitions`, `call`, `runCalls` |

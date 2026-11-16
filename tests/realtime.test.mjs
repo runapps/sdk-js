@@ -211,3 +211,158 @@ test("a session cut by its spending cap closes with 4402 and still reports the c
   assert.equal(info.reason, "spending cap reached");
   assert.equal(info.usage.total_cost, 0.1);
 });
+
+// A streaming TTS server like the gateway's volc_tts plugin: text pieces
+// join the open response; each commit ends one, and committed responses
+// play one after another; response.cancel stops the open one and drops
+// the queue.
+function ttsLike() {
+  let n = 0;
+  let cur = null; // {id, text, committed}
+  const queue = [];
+  const finish = (ws, status) => {
+    ws.serverSend({ type: "response.output_audio.delta", response_id: cur.id, delta: "AAABAA==" });
+    ws.serverSend({ type: "response.output_audio_transcript.delta", response_id: cur.id, delta: cur.text });
+    ws.serverSend({ type: "response.done", response: { id: cur.id, status, usage: { characters: [...cur.text].length } } });
+    cur = null;
+    const next = queue.shift();
+    if (next) open(ws, next);
+  };
+  const open = (ws, r) => {
+    cur = r;
+    ws.serverSend({ type: "response.created", response: { id: r.id } });
+    if (r.committed) setTimeout(() => cur === r && finish(ws, "completed"), 5);
+  };
+  return (ws, event) => {
+    switch (event.type) {
+      case "session.create":
+        ws.serverSend({ type: "session.created", session: { id: "tts-1", mode: "tts", voice: "v" } });
+        break;
+      case "input_text.append": {
+        const last = queue[queue.length - 1];
+        if (last && !last.committed) last.text += event.text;
+        else if (cur && !cur.committed) cur.text += event.text;
+        else if (cur) queue.push({ id: `r${++n}`, text: event.text, committed: false });
+        else open(ws, { id: `r${++n}`, text: event.text, committed: false });
+        break;
+      }
+      case "input_text.commit": {
+        const last = queue[queue.length - 1];
+        if (last) last.committed = true;
+        else if (cur && !cur.committed) {
+          cur.committed = true;
+          const r = cur;
+          setTimeout(() => cur === r && finish(ws, "completed"), 5);
+        }
+        break;
+      }
+      case "response.cancel":
+        queue.length = 0;
+        if (cur) finish(ws, "cancelled");
+        break;
+      case "session.close":
+        ws.serverSend({ type: "session.closed" });
+        ws.serverSend({ type: "gateway.usage", usage: { input_tokens: 9, output_tokens: 0, total_cost: 0.0005 } });
+        ws.close(1000, "session completed");
+        break;
+    }
+  };
+}
+
+async function* chatChunks(pieces, gapMs = 1) {
+  for (const p of pieces) {
+    await new Promise((r) => setTimeout(r, gapMs));
+    yield { id: "c", object: "chat.completion.chunk", created: 0, model: "m", choices: [{ index: 0, delta: { content: p } }] };
+  }
+  yield { id: "c", object: "chat.completion.chunk", created: 0, model: "m", choices: [], usage: { total_tokens: 3 } };
+}
+
+test("speak() streams text pieces, commits, and resolves with the response", async () => {
+  const { FakeWebSocket, sockets } = fakeWebSocket(ttsLike());
+  const client = new RunApps({ apiKey: "rk_test123" });
+  const tts = await client.realtime.connect({ model: "Doubao TTS 2.0 Streaming", session: { voice: "v" }, WebSocket: FakeWebSocket });
+  const ws = sockets[0];
+  const spoken = [];
+  tts.on("response.output_audio_transcript.delta", (e) => spoken.push(e.delta));
+
+  const a = await tts.speak("你好。");
+  assert.deepEqual(a, { id: "r1", status: "completed", usage: { characters: 3 } });
+
+  // A chat stream, read as it arrives; reasoning-only and usage chunks say nothing.
+  const b = await tts.speak(chatChunks(["今天", "天气", "", "不错。"]));
+  assert.equal(b.status, "completed");
+  assert.equal(b.usage.characters, 7);
+  assert.deepEqual(spoken, ["你好。", "今天天气不错。"]);
+  const appends = ws.sent.filter((e) => e.type === "input_text.append").map((e) => e.text);
+  assert.deepEqual(appends, ["你好。", "今天", "天气", "不错。"]);
+  assert.equal(ws.sent.filter((e) => e.type === "input_text.commit").length, 2);
+
+  // Nothing to say: no response, no commit.
+  assert.deepEqual(await tts.speak(""), { id: "", status: "completed", usage: { characters: 0 } });
+  assert.equal(ws.sent.filter((e) => e.type === "input_text.commit").length, 2);
+
+  const { usage } = await tts.close();
+  assert.equal(usage.total_cost, 0.0005);
+});
+
+test("speak() calls queue in order, one response each", async () => {
+  const { FakeWebSocket } = fakeWebSocket(ttsLike());
+  const client = new RunApps({ apiKey: "rk_test123" });
+  const tts = await client.realtime.connect({ model: "Doubao TTS 2.0 Streaming", WebSocket: FakeWebSocket });
+  const spoken = [];
+  tts.on("response.output_audio_transcript.delta", (e) => spoken.push(e.delta));
+  const results = await Promise.all([tts.speak("一。"), tts.speak("二二。"), tts.speak("三三三。")]);
+  assert.deepEqual(
+    results.map((r) => [r.id, r.status, r.usage.characters]),
+    [
+      ["r1", "completed", 2],
+      ["r2", "completed", 3],
+      ["r3", "completed", 4],
+    ],
+  );
+  assert.deepEqual(spoken, ["一。", "二二。", "三三三。"]);
+  await tts.close();
+});
+
+test("cancelResponse() stops the open speech, drops the queued ones, and stops reading the source", async () => {
+  const { FakeWebSocket, sockets } = fakeWebSocket(ttsLike());
+  const client = new RunApps({ apiKey: "rk_test123" });
+  const tts = await client.realtime.connect({ model: "Doubao TTS 2.0 Streaming", WebSocket: FakeWebSocket });
+  const ws = sockets[0];
+  let read = 0;
+  async function* slow() {
+    for (const p of ["第一", "句", "话", "还", "没", "完"]) {
+      read++;
+      await new Promise((r) => setTimeout(r, 5));
+      yield p;
+    }
+  }
+  const first = tts.speak(slow());
+  await new Promise((r) => setTimeout(r, 12));
+  tts.cancelResponse();
+  const r = await first;
+  assert.equal(r.status, "cancelled");
+  assert.ok(read < 6, `stopped reading the source (read ${read})`);
+  assert.equal(ws.sent.filter((e) => e.type === "input_text.commit").length, 0, "a cancelled speech isn't committed");
+
+  // Queued behind an open response, then cancelled with it.
+  const open = tts.speak("一。");
+  const queued = tts.speak("二。");
+  tts.cancelResponse();
+  assert.equal((await open).status, "cancelled");
+  assert.deepEqual(await queued, { id: "", status: "cancelled", usage: { characters: 0 } });
+
+  // The session carries on.
+  assert.equal((await tts.speak("好的。")).status, "completed");
+  await tts.close();
+});
+
+test("speak() rejects if the session closes first", async () => {
+  const { FakeWebSocket, sockets } = fakeWebSocket(ttsLike());
+  const client = new RunApps({ apiKey: "rk_test123" });
+  const tts = await client.realtime.connect({ model: "Doubao TTS 2.0 Streaming", WebSocket: FakeWebSocket });
+  const pending = tts.speak(chatChunks(["很长", "的话"], 20));
+  await new Promise((r) => setTimeout(r, 25));
+  sockets[0].close(4402, "spending cap reached");
+  await assert.rejects(pending, /closed \(4402\)/);
+});

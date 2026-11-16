@@ -5,6 +5,30 @@ export interface RealtimeEvent {
     type: string;
     [key: string]: unknown;
 }
+/** One spoken response of a text-to-speech session: `response.done`'s `response`. */
+export interface RealtimeSpeech {
+    id: string;
+    /** "cancelled" after `cancelResponse()`; "failed" with `status_details.error`. */
+    status: "completed" | "cancelled" | "failed" | string;
+    /** Characters billed for this response. */
+    usage?: {
+        characters?: number;
+    };
+    status_details?: {
+        error?: string;
+    };
+}
+/** Text for `speak()`: a string, or pieces of it as they are produced —
+ *  strings, or `client.chat.stream()` chunks (their `delta.content`). */
+export type SpeakSource = string | Iterable<string | SpeakChunk> | AsyncIterable<string | SpeakChunk>;
+/** The part of a chat stream chunk `speak()` reads. */
+export interface SpeakChunk {
+    choices?: {
+        delta?: {
+            content?: string | null;
+        };
+    }[];
+}
 /** What a realtime session cost, from the closing `gateway.usage` event. */
 export interface RealtimeUsage {
     input_tokens?: number;
@@ -80,6 +104,8 @@ export declare class RealtimeSession {
     private queue;
     private waiters;
     private iterating;
+    /** speak() calls whose response hasn't finished, oldest first. */
+    private speeches;
     /** @internal */
     constructor(ws: WebSocketLike);
     /**
@@ -105,8 +131,26 @@ export declare class RealtimeSession {
     unmute(): void;
     /** Have the model speak `text` (a greeting, or a scripted line). */
     say(text: string): void;
-    /** Interrupt the model's current reply. */
+    /** Interrupt the model's current reply. On a text-to-speech session this
+     *  also drops the responses queued behind it: their `speak()` calls
+     *  resolve with status "cancelled" and stop reading their source. */
     cancelResponse(): void;
+    /** Text-to-speech: send a piece of the text to speak (any size; the
+     *  model finds the sentences). Opens a response if none is open. */
+    appendText(text: string): void;
+    /** Text-to-speech: the open response's text is complete — the rest of
+     *  its audio follows, then `response.done`. */
+    commitText(): void;
+    /**
+     * Text-to-speech: speak `text` — a string, or an (async) iterable of
+     * pieces such as `client.chat.stream()` itself, read as it arrives so the
+     * audio starts with the first words. Resolves with the response once all
+     * its audio has been sent (`status` "completed", or "cancelled" after
+     * `cancelResponse()`, which also stops reading the source). Calls made
+     * while a response is speaking queue behind it; don't run two at once
+     * over the same session, or their text interleaves.
+     */
+    speak(text: SpeakSource): Promise<RealtimeSpeech>;
     /** Change session settings mid-session (instructions, voice, tools, …). */
     update(session: Record<string, unknown>): void;
     /** Answer a `response.function_call_arguments.done` tool call. */

@@ -42,12 +42,59 @@ import type { Transport } from "./transport.js";
  * sentence so far, revisions included, in `transcript`; `.completed` a
  * finished sentence (`transcript`) with `start_ms` / `end_ms`. `commitAudio()` or `close()` ends
  * the audio; the last sentence settles before the session closes.
+ *
+ * Streaming text-to-speech models (e.g. "Doubao TTS 2.0 Streaming") go the
+ * other way: text in as it is written (an LLM's tokens), audio out while
+ * it is still arriving. The model splits sentences itself, so the text
+ * can come in pieces of any size. `session.created` carries
+ * `session.mode: "tts"`; session fields are `voice`, `speed`, `volume`,
+ * `pitch`, `instructions` (how to say it), `language`, `subtitles`, …
+ *
+ *   → input_text.append   {text}   opens a response if none is open
+ *   → input_text.commit            the response's text is complete
+ *   → response.cancel              stop the open response, drop queued ones
+ *   ← response.created / response.output_audio.delta (24 kHz PCM16 mono)
+ *   ← response.output_audio_transcript.delta   {delta, words?} the text being spoken
+ *   ← response.done       {response: {id, status, usage: {characters}}}
+ *
+ * `speak(text | stream)` does the append/commit and resolves with the
+ * response's `response.done`; text committed while a response is still
+ * speaking queues up behind it. Billed per character.
  */
 
 /** One protocol event. `type` names it; the rest depends on the event. */
 export interface RealtimeEvent {
   type: string;
   [key: string]: unknown;
+}
+
+/** One spoken response of a text-to-speech session: `response.done`'s `response`. */
+export interface RealtimeSpeech {
+  id: string;
+  /** "cancelled" after `cancelResponse()`; "failed" with `status_details.error`. */
+  status: "completed" | "cancelled" | "failed" | string;
+  /** Characters billed for this response. */
+  usage?: { characters?: number };
+  status_details?: { error?: string };
+}
+
+/** Text for `speak()`: a string, or pieces of it as they are produced —
+ *  strings, or `client.chat.stream()` chunks (their `delta.content`). */
+export type SpeakSource =
+  | string
+  | Iterable<string | SpeakChunk>
+  | AsyncIterable<string | SpeakChunk>;
+
+/** The part of a chat stream chunk `speak()` reads. */
+export interface SpeakChunk {
+  choices?: { delta?: { content?: string | null } }[];
+}
+
+interface PendingSpeech {
+  done: boolean;
+  promise: Promise<RealtimeSpeech>;
+  resolve: (r: RealtimeSpeech) => void;
+  reject: (e: Error) => void;
 }
 
 /** What a realtime session cost, from the closing `gateway.usage` event. */
@@ -134,6 +181,8 @@ export class RealtimeSession {
   private queue: RealtimeEvent[] = [];
   private waiters: ((r: IteratorResult<RealtimeEvent>) => void)[] = [];
   private iterating = false;
+  /** speak() calls whose response hasn't finished, oldest first. */
+  private speeches: PendingSpeech[] = [];
 
   /** @internal */
   constructor(private readonly ws: WebSocketLike) {
@@ -154,6 +203,10 @@ export class RealtimeSession {
         if (typeof id === "string") this.sessionId = id;
       } else if (event.type === "gateway.usage") {
         this.usage = (event.usage as RealtimeUsage) ?? null;
+      } else if (event.type === "response.done" && this.speeches.length) {
+        const p = this.speeches.shift()!;
+        p.done = true;
+        p.resolve((event.response as RealtimeSpeech) ?? { id: "", status: "completed" });
       }
       this.dispatch(event);
     });
@@ -161,6 +214,10 @@ export class RealtimeSession {
       if (this.isClosed) return;
       this.isClosed = true;
       for (const w of this.waiters.splice(0)) w({ value: undefined, done: true });
+      for (const p of this.speeches.splice(0)) {
+        p.done = true;
+        p.reject(new Error(`runapps: realtime session closed (${ev.code ?? 1006}) before the speech finished`));
+      }
       this.resolveClosed({ code: ev.code ?? 1006, reason: ev.reason ?? "", usage: this.usage });
     });
   }
@@ -216,9 +273,80 @@ export class RealtimeSession {
     this.send({ type: "speech_text_buffer.commit", text });
   }
 
-  /** Interrupt the model's current reply. */
+  /** Interrupt the model's current reply. On a text-to-speech session this
+   *  also drops the responses queued behind it: their `speak()` calls
+   *  resolve with status "cancelled" and stop reading their source. */
   cancelResponse(): void {
+    // The open response answers with its own response.done; the queued
+    // ones are dropped without one. Split them before sending: the open
+    // one's response.done may already be on its way.
+    const [open, ...queued] = this.speeches;
+    this.speeches = open ? [open] : [];
+    if (open) open.done = true; // stop feeding it; it resolves on its response.done
+    for (const p of queued) {
+      p.done = true;
+      p.resolve({ id: "", status: "cancelled", usage: { characters: 0 } });
+    }
     this.send({ type: "response.cancel" });
+  }
+
+  /** Text-to-speech: send a piece of the text to speak (any size; the
+   *  model finds the sentences). Opens a response if none is open. */
+  appendText(text: string): void {
+    if (text) this.send({ type: "input_text.append", text });
+  }
+
+  /** Text-to-speech: the open response's text is complete — the rest of
+   *  its audio follows, then `response.done`. */
+  commitText(): void {
+    this.send({ type: "input_text.commit" });
+  }
+
+  /**
+   * Text-to-speech: speak `text` — a string, or an (async) iterable of
+   * pieces such as `client.chat.stream()` itself, read as it arrives so the
+   * audio starts with the first words. Resolves with the response once all
+   * its audio has been sent (`status` "completed", or "cancelled" after
+   * `cancelResponse()`, which also stops reading the source). Calls made
+   * while a response is speaking queue behind it; don't run two at once
+   * over the same session, or their text interleaves.
+   */
+  async speak(text: SpeakSource): Promise<RealtimeSpeech> {
+    let resolve!: (r: RealtimeSpeech) => void;
+    let reject!: (e: Error) => void;
+    const promise = new Promise<RealtimeSpeech>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    promise.catch(() => {}); // a speech abandoned by a failing source must not go unhandled
+    const p: PendingSpeech = { done: false, promise, resolve, reject };
+    let started = false;
+    const put = (piece: string) => {
+      if (!piece) return;
+      if (!started) {
+        this.speeches.push(p);
+        started = true;
+      }
+      this.appendText(piece);
+    };
+    if (typeof text === "string") {
+      put(text);
+    } else {
+      try {
+        for await (const item of text as AsyncIterable<string | SpeakChunk>) {
+          if (p.done) break;
+          put(typeof item === "string" ? item : (item?.choices?.[0]?.delta?.content ?? ""));
+        }
+      } catch (err) {
+        // The source failed mid-reply: close the response on what was sent,
+        // so the session's next text doesn't join it.
+        if (started && !p.done) this.commitText();
+        throw err;
+      }
+    }
+    if (!started) return { id: "", status: "completed", usage: { characters: 0 } };
+    if (!p.done) this.commitText();
+    return promise;
   }
 
   /** Change session settings mid-session (instructions, voice, tools, …). */

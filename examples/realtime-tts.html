@@ -1,0 +1,121 @@
+<!doctype html>
+<!--
+  Streaming text-to-speech in the browser: ask a chat model something and
+  hear the reply while it is still being written. The text shows as it
+  streams; the speech follows a sentence behind.
+
+  As an app on RunApps, `new RunApps()` signs the user in and bills them.
+  To try it locally, serve this file from http://localhost and pass a key
+  while developing: `new RunApps({ apiKey: "rk_..." })` — never ship a key
+  in a page.
+-->
+<html lang="zh">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Streaming TTS</title>
+  <style>
+    body { font: 16px/1.5 system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 16px; }
+    input { font: inherit; width: 100%; box-sizing: border-box; padding: .5rem; }
+    button { font: inherit; padding: .5rem 1rem; margin: .5rem .5rem 0 0; }
+    #status { color: #666; }
+    #reply { white-space: pre-wrap; }
+    #caption { color: #0a7; }
+  </style>
+</head>
+<body>
+  <h1>Streaming TTS</h1>
+  <input id="question" value="讲一个关于猫的小故事，三四句话就好。">
+  <button id="ask">Ask and listen</button>
+  <button id="stop" disabled>Stop</button>
+  <p id="status">Idle</p>
+  <p id="reply"></p>
+  <p id="caption"></p>
+
+  <script src="https://www.runapps.ai/sdk/latest.js"></script>
+  <script>
+    const client = new RunApps();
+    const $ = (id) => document.getElementById(id);
+    let tts, outCtx, playHead = 0, playing = [];
+
+    // Queue a chunk of 24 kHz PCM16 right after the previous one.
+    function play(samples) {
+      const buf = outCtx.createBuffer(1, samples.length, 24000);
+      buf.copyToChannel(samples, 0);
+      const src = outCtx.createBufferSource();
+      src.buffer = buf;
+      src.connect(outCtx.destination);
+      playHead = Math.max(playHead, outCtx.currentTime);
+      src.start(playHead);
+      playHead += buf.duration;
+      playing.push(src);
+      src.onended = () => (playing = playing.filter((s) => s !== src));
+    }
+    function stopPlayback() {
+      for (const src of playing) src.stop();
+      playing = [];
+      playHead = 0;
+    }
+
+    // One session serves every question; open it on first use.
+    async function speaker() {
+      if (tts) return tts;
+      outCtx = new AudioContext({ sampleRate: 24000 });
+      tts = await client.realtime.connect({
+        model: "Doubao TTS 2.0 Streaming",
+        session: { voice: "zh_female_vv_uranus_bigtts", subtitles: true },
+      });
+      tts.on("response.output_audio.delta", (e) => play(RunApps.float32FromPCM16(RunApps.base64ToBytes(e.delta))));
+      tts.on("response.output_audio_transcript.delta", (e) => ($("caption").textContent = "🔊 " + e.delta));
+      tts.on("error", (e) => ($("status").textContent = "Error: " + JSON.stringify(e.error)));
+      tts.closed.then(({ code, usage }) => {
+        $("status").textContent = `Speech session ended (${code})` + (usage ? ` — cost $${usage.total_cost}` : "");
+        tts = null;
+      });
+      return tts;
+    }
+
+    $("ask").onclick = async () => {
+      $("ask").disabled = true;
+      $("stop").disabled = false;
+      $("reply").textContent = $("caption").textContent = "";
+      $("status").textContent = "Thinking…";
+      try {
+        const session = await speaker();
+        const stream = client.chat.stream({
+          model: "DeepSeek",
+          messages: [
+            { role: "system", content: "回答会被朗读出来：口语化，不用列表和表格。" },
+            { role: "user", content: $("question").value },
+          ],
+          reasoning_effort: "none",
+        });
+        // Show the text and speak it at once: each piece goes to the screen
+        // and to the speech session as it arrives.
+        let first = true;
+        for await (const chunk of stream) {
+          const piece = chunk.choices[0]?.delta?.content ?? "";
+          if (!piece) continue;
+          if (first) $("status").textContent = "Speaking…";
+          first = false;
+          $("reply").textContent += piece;
+          session.appendText(piece);
+        }
+        session.commitText(); // the reply is complete: the rest of its audio follows
+      } catch (err) {
+        $("status").textContent = "Failed: " + err.message;
+      } finally {
+        $("ask").disabled = false;
+      }
+    };
+
+    // Barge-in: stop the speech now (the session stays open for the next question).
+    $("stop").onclick = () => {
+      tts?.cancelResponse();
+      stopPlayback();
+      $("stop").disabled = true;
+      $("status").textContent = "Stopped";
+    };
+  </script>
+</body>
+</html>

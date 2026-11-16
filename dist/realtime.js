@@ -20,6 +20,8 @@ export class RealtimeSession {
     queue = [];
     waiters = [];
     iterating = false;
+    /** speak() calls whose response hasn't finished, oldest first. */
+    speeches = [];
     /** @internal */
     constructor(ws) {
         this.ws = ws;
@@ -46,6 +48,11 @@ export class RealtimeSession {
             else if (event.type === "gateway.usage") {
                 this.usage = event.usage ?? null;
             }
+            else if (event.type === "response.done" && this.speeches.length) {
+                const p = this.speeches.shift();
+                p.done = true;
+                p.resolve(event.response ?? { id: "", status: "completed" });
+            }
             this.dispatch(event);
         });
         ws.addEventListener("close", (ev) => {
@@ -54,6 +61,10 @@ export class RealtimeSession {
             this.isClosed = true;
             for (const w of this.waiters.splice(0))
                 w({ value: undefined, done: true });
+            for (const p of this.speeches.splice(0)) {
+                p.done = true;
+                p.reject(new Error(`runapps: realtime session closed (${ev.code ?? 1006}) before the speech finished`));
+            }
             this.resolveClosed({ code: ev.code ?? 1006, reason: ev.reason ?? "", usage: this.usage });
         });
     }
@@ -102,9 +113,86 @@ export class RealtimeSession {
     say(text) {
         this.send({ type: "speech_text_buffer.commit", text });
     }
-    /** Interrupt the model's current reply. */
+    /** Interrupt the model's current reply. On a text-to-speech session this
+     *  also drops the responses queued behind it: their `speak()` calls
+     *  resolve with status "cancelled" and stop reading their source. */
     cancelResponse() {
+        // The open response answers with its own response.done; the queued
+        // ones are dropped without one. Split them before sending: the open
+        // one's response.done may already be on its way.
+        const [open, ...queued] = this.speeches;
+        this.speeches = open ? [open] : [];
+        if (open)
+            open.done = true; // stop feeding it; it resolves on its response.done
+        for (const p of queued) {
+            p.done = true;
+            p.resolve({ id: "", status: "cancelled", usage: { characters: 0 } });
+        }
         this.send({ type: "response.cancel" });
+    }
+    /** Text-to-speech: send a piece of the text to speak (any size; the
+     *  model finds the sentences). Opens a response if none is open. */
+    appendText(text) {
+        if (text)
+            this.send({ type: "input_text.append", text });
+    }
+    /** Text-to-speech: the open response's text is complete — the rest of
+     *  its audio follows, then `response.done`. */
+    commitText() {
+        this.send({ type: "input_text.commit" });
+    }
+    /**
+     * Text-to-speech: speak `text` — a string, or an (async) iterable of
+     * pieces such as `client.chat.stream()` itself, read as it arrives so the
+     * audio starts with the first words. Resolves with the response once all
+     * its audio has been sent (`status` "completed", or "cancelled" after
+     * `cancelResponse()`, which also stops reading the source). Calls made
+     * while a response is speaking queue behind it; don't run two at once
+     * over the same session, or their text interleaves.
+     */
+    async speak(text) {
+        let resolve;
+        let reject;
+        const promise = new Promise((res, rej) => {
+            resolve = res;
+            reject = rej;
+        });
+        promise.catch(() => { }); // a speech abandoned by a failing source must not go unhandled
+        const p = { done: false, promise, resolve, reject };
+        let started = false;
+        const put = (piece) => {
+            if (!piece)
+                return;
+            if (!started) {
+                this.speeches.push(p);
+                started = true;
+            }
+            this.appendText(piece);
+        };
+        if (typeof text === "string") {
+            put(text);
+        }
+        else {
+            try {
+                for await (const item of text) {
+                    if (p.done)
+                        break;
+                    put(typeof item === "string" ? item : (item?.choices?.[0]?.delta?.content ?? ""));
+                }
+            }
+            catch (err) {
+                // The source failed mid-reply: close the response on what was sent,
+                // so the session's next text doesn't join it.
+                if (started && !p.done)
+                    this.commitText();
+                throw err;
+            }
+        }
+        if (!started)
+            return { id: "", status: "completed", usage: { characters: 0 } };
+        if (!p.done)
+            this.commitText();
+        return promise;
     }
     /** Change session settings mid-session (instructions, voice, tools, …). */
     update(session) {
