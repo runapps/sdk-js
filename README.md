@@ -460,7 +460,7 @@ new RunApps({ sync: false });                       // off
 new RunApps({ sync: { databases: ["notes"], exclude: ["notes/thumbnails"] } });
 ```
 
-The app keeps using IndexedDB as before, directly or through Dexie, idb, idb-keyval and the like. The first `indexedDB.open` of a database on a new device waits (up to 5 s) for the user's data to arrive, so the first read already sees it.
+The app keeps using IndexedDB as before, directly or through Dexie, idb, idb-keyval and the like. The first `indexedDB.open` of a database on a new device waits (up to 5 s) for the user's data to arrive, so the first read already sees it. A larger download goes on after that: the state is `"syncing"` until it lands, `db:change` then names what arrived, and `lastSyncedAt` stays unset until the first whole sync — show "syncing", not an empty list, while a store is empty and `lastSyncedAt` is unset.
 
 When it runs: on page load, when a database is opened, when the page is focused, shown again or back online, and every minute while it is visible; a write goes up about 2.5 s after it commits, and at once when the page is hidden or left (the write on `pagehide` uses `keepalive` so it can finish after the tab closes; one the browser drops waits in the device's log and goes up the next time the app is opened there). A reload never loses a write: pending changes are kept in IndexedDB and pushed on the next load, and a write whose tab closed in the instant between its commit and the log is found and logged again.
 

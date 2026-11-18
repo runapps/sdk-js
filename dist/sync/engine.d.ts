@@ -33,6 +33,9 @@ export interface SyncState {
     /** Changes that can never be synced (a value sync cannot store, such
      *  as a function or a DOM node) and were set aside. */
     failed?: number;
+    /** When a round last compared this device with the cloud. Unset until
+     *  the first one has: on a new device that is after the app opened
+     *  its database and the first download landed. */
     lastSyncedAt?: number;
     /** When a sync last moved data — pushed local writes or applied
      *  another device's. A quiet pull that found nothing leaves it. */

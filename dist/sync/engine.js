@@ -670,22 +670,49 @@ export class SyncEngine {
     }
     /** Pull one database now (an open waits for it). */
     pullOne(name) {
-        return this.enqueue(async () => {
+        const run = this.enqueue(async () => {
             const userId = this.deps.userId();
             if (!userId || this.paused || this.disposed)
                 return;
             const check = this.checker(userId);
-            await this.loadMeta();
-            await this.reloadSchemas();
-            await this.recoverWal();
-            // Another user's rows must be gone before the app's first read,
-            // not only after the first full sync.
-            await this.ensureOwner(userId);
-            const errors = [];
-            await this.pullDbs(name, check, errors);
-            if (errors.length)
-                throw errors[0];
+            // The state says so while it runs: on a new device this pull is
+            // the whole first download, and it can outlast the time an open
+            // waits for it — the app is then drawing empty stores, and "idle"
+            // would tell its user that this is all there is.
+            const before = this.state;
+            this.setState({ state: "syncing" });
+            try {
+                await this.loadMeta();
+                await this.reloadSchemas();
+                await this.recoverWal();
+                // Another user's rows must be gone before the app's first read,
+                // not only after the first full sync.
+                await this.ensureOwner(userId);
+                const errors = [];
+                await this.pullDbs(name, check, errors);
+                if (errors.length)
+                    throw errors[0];
+            }
+            finally {
+                // Back to where a round left it: one database pulled is not a
+                // round, whether it worked or not.
+                if (this.state.state === "syncing") {
+                    if (before.state === "error" || before.state === "offline")
+                        this.setState({ state: before.state, error: before.error });
+                    else
+                        this.setState({ state: "idle" });
+                }
+            }
         });
+        // No round has compared this device with the cloud yet (a new
+        // device: the round at start knew no database): run one now, so the
+        // state ends at "synced", "offline" or the error, not at a guess.
+        const after = () => {
+            if (!this.disposed && this.state.lastSyncedAt === undefined)
+                void this.schedule("open");
+        };
+        run.then(after, after);
+        return run;
     }
     askLeaderToPull(name) {
         if (!this.channel)
@@ -1212,6 +1239,10 @@ export class SyncEngine {
             // push that fails (no balance, a network error) does not keep the
             // other devices' changes from arriving. A push applies here what
             // it merged with, so no second pull is needed.
+            // A round that knows no database compares nothing with the cloud:
+            // a new device before the app has opened one. It is not a sync to
+            // date `lastSyncedAt` from — the download starts at that open.
+            const compared = this.schemas.size > 0;
             await this.pullDbs(null, check, errors).catch(keep);
             await this.push(userId, check).catch(keep);
             await this.adoptScan(check).catch(keep);
@@ -1223,7 +1254,7 @@ export class SyncEngine {
             this.backoffMs = 0;
             this.backoffUntil = 0;
             const now = Date.now();
-            this.setState({ state: "idle", lastSyncedAt: now, ...(this.moved ? { lastChangeAt: now } : {}) });
+            this.setState({ state: "idle", ...(compared ? { lastSyncedAt: now } : {}), ...(this.moved ? { lastChangeAt: now } : {}) });
         }
         catch (err) {
             await this.refreshPending();

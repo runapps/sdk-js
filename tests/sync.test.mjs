@@ -28,6 +28,7 @@ class MemoryRemote {
   }
   async getJSON(path, ifNoneMatch) {
     this.gets++;
+    if (this.getDelay) await new Promise((r) => setTimeout(r, this.getDelay));
     const o = this.objects.get(path);
     if (!o) return { status: "missing" };
     if (ifNoneMatch && ifNoneMatch === o.etag) return { status: "unchanged" };
@@ -221,6 +222,43 @@ test("a new device gets the data before its first read", async () => {
     assert.deepEqual(await B.get(dbB, "notes", "n1"), { id: "n1", title: "from A", tags: ["x"] });
     assert.deepEqual(await B.get(dbB, "kv", "settings"), { theme: "dark" });
     assert.ok(B.changes.some((c) => c.db === "app" && c.store === "notes"), "db:change fired for the pulled store");
+    dbB.close();
+  } finally {
+    B.dispose();
+  }
+});
+
+test("a first download that outlasts the open is not reported as synced", async () => {
+  const remote = new MemoryRemote();
+  const A = device(remote);
+  const dbA = await A.openApp();
+  await A.write(dbA, "notes", (st) => st.put({ id: "n1", title: "from A" }));
+  await A.engine.now();
+  dbA.close();
+  A.dispose();
+
+  remote.getDelay = 400; // a slow link, or a large library
+  const B = device(remote, { options: { openTimeoutMs: 100 } });
+  try {
+    // The round at start knows no database: nothing was compared.
+    await B.engine.ready();
+    assert.equal(B.engine.status().lastSyncedAt, undefined, "no sync to date from before a database is known");
+
+    const dbB = await B.openApp(); // let go after 100 ms, the pull still running
+    assert.deepEqual(await B.readAll(dbB, "notes"), [], "the app reads before the download landed");
+    assert.equal(B.engine.status().state, "syncing", "and is told a sync is running");
+    assert.equal(B.engine.status().lastSyncedAt, undefined);
+
+    for (let i = 0; i < 100 && B.engine.status().lastSyncedAt === undefined; i++) await sleep(20);
+    assert.equal(B.engine.status().state, "idle");
+    assert.ok(B.engine.status().lastSyncedAt, "a whole round follows the first download");
+    assert.deepEqual(await B.readAll(dbB, "notes"), [{ id: "n1", title: "from A" }]);
+    // Never "idle and synced" while the store was still empty.
+    const landed = B.changes.length > 0;
+    assert.ok(landed, "db:change fired for the download");
+    const early = B.states.findIndex((s) => s.lastSyncedAt !== undefined);
+    const syncing = B.states.findIndex((s) => s.state === "syncing");
+    assert.ok(syncing >= 0 && syncing < early, "syncing was reported before the first synced state");
     dbB.close();
   } finally {
     B.dispose();
