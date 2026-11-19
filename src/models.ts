@@ -41,6 +41,12 @@ export interface Model {
    *   const videoCapable = models.filter(m => acceptsModality(m, "video"));
    */
   input_modalities?: string[];
+  /**
+   * A chat model's Artificial Analysis Intelligence Index (0–100, higher is
+   * stronger), copied from artificialanalysis.ai on the gateway. Omitted for
+   * models the index doesn't cover and for every other capability.
+   */
+  score?: number;
   options?: Record<string, unknown>;
   input_price_per_mtok: number;
   output_price_per_mtok: number;
