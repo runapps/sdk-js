@@ -94,6 +94,13 @@ export interface VideoUsageTokens {
 export interface VideoStatus {
   id: string;
   status: string;
+  /**
+   * Whole percent, 0-100 (never a 0-1 fraction), the same on every model.
+   * 100 exactly when `status` is `succeeded`, and it never goes down
+   * between polls. Most models report no percentage: theirs stays 0 until
+   * done, so treat 0 as "unknown" (show a spinner and the time since
+   * `created_at`) rather than a bar stuck at 0%.
+   */
   progress: number;
   video_url?: string;
   /**
