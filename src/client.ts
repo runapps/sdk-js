@@ -218,6 +218,7 @@ export class RunApps {
     let apiKeyResolver = options.apiKeyResolver;
     let baseURL = options.baseURL;
     let onUnauthorized: (() => void) | undefined;
+    let peekToken: (() => string | null) | undefined;
 
     if (provider === "runapps" || provider === "runjobs") {
       // The grant page (/api/sdk/grant) and the gateway both live on
@@ -256,6 +257,7 @@ export class RunApps {
       // because the user unsubscribed in another tab).  Drop the cached
       // token so the transport's auto-retry hits a fresh signIn() flow.
       onUnauthorized = () => auth.invalidate();
+      peekToken = auth.peekToken;
     }
 
     if (!options.apiKey && !apiKeyResolver) {
@@ -268,6 +270,7 @@ export class RunApps {
       ...(options.apiKey !== undefined && { apiKey: options.apiKey }),
       ...(apiKeyResolver !== undefined && { apiKeyResolver }),
       ...(onUnauthorized !== undefined && { onUnauthorized }),
+      ...(peekToken !== undefined && { peekToken }),
       ...(options.fetch ? { fetchImpl: options.fetch } : {}),
     });
     // Service constructors receive the shared event bus so each call

@@ -32,6 +32,12 @@ export interface TransportOptions {
    * the standard signIn() redirect-grant flow.
    */
   onUnauthorized?: () => void | Promise<void>;
+  /**
+   * The token the client already holds, without fetching one: for public
+   * routes that show more to a known caller (the model list). Must never
+   * start a sign-in. Absent: the static `apiKey`, else none.
+   */
+  peekToken?: () => string | null | undefined;
   /** Optional fetch override (e.g. node-fetch with custom agent). */
   fetchImpl?: typeof fetch;
 }
@@ -41,6 +47,7 @@ export class Transport {
   private readonly apiKey: string | undefined;
   private readonly apiKeyResolver: (() => string | Promise<string>) | undefined;
   private readonly onUnauthorized: (() => void | Promise<void>) | undefined;
+  private readonly peekToken: (() => string | null | undefined) | undefined;
   private readonly fetchImpl: typeof fetch;
 
   constructor(opts: TransportOptions) {
@@ -53,6 +60,7 @@ export class Transport {
     this.apiKey = opts.apiKey;
     this.apiKeyResolver = opts.apiKeyResolver;
     this.onUnauthorized = opts.onUnauthorized;
+    this.peekToken = opts.peekToken;
     // Bind to globalThis when using the platform's native fetch.
     // Without binding, `this.fetchImpl(...)` invokes with `this`
     // pointing at the Transport instance, and the browser's
@@ -172,11 +180,22 @@ export class Transport {
    *  the sign-in page just to read the model catalogue. */
   async getPublicJSON<T>(
     path: string,
-    init?: { signal?: AbortSignal },
+    init?: { signal?: AbortSignal; withHeldToken?: boolean },
   ): Promise<T> {
+    // A public route may show a signed-in caller more (models an admin
+    // opened to them): send the token the client already holds, if any.
+    let token: string | null | undefined;
+    if (init?.withHeldToken) {
+      try {
+        token = this.peekToken ? this.peekToken() : this.apiKey;
+      } catch {
+        token = null;
+      }
+    }
     const resp = await this.fetchImpl(this.resolve(path), {
       method: "GET",
       cache: "no-store",
+      ...(token ? { headers: { Authorization: `Bearer ${token}` } } : {}),
       ...(init?.signal ? { signal: init.signal } : {}),
     });
     if (!resp.ok) {

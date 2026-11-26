@@ -160,7 +160,8 @@ export class ModelsService {
 
   /**
    * List models available on the gateway. Pass `{ capability: "..." }` to
-   * filter server-side. Needs no sign-in or key.
+   * filter server-side. Needs no sign-in or key; a client already signed in
+   * (or given a key) also gets the models an admin opened to that user only.
    */
   async list(
     opts: ModelListOptions = {},
@@ -170,9 +171,10 @@ export class ModelsService {
     if (opts.capability) {
       path += `?capability=${encodeURIComponent(opts.capability)}`;
     }
-    // The catalogue is public: no token, so listing models never sends a
-    // signed-out user to sign in.
-    const resp = await this.transport.getPublicJSON<{ data: Model[] }>(path, init);
+    // The catalogue is public: listing models never fetches a token, so it
+    // never sends a signed-out user to sign in. A token already held goes
+    // along, for the models open only to some users.
+    const resp = await this.transport.getPublicJSON<{ data: Model[] }>(path, { ...init, withHeldToken: true });
     return resp.data;
   }
 

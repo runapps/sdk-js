@@ -276,6 +276,9 @@ export class BrowserAuth {
     }
   }
 
+  /** The token held now, if fresh — never signs in. */
+  peekToken = (): string | null => (this.tokenIsFresh() ? this.token : null);
+
   /** Public token-fetcher; pass to RunApps as `apiKeyResolver`. */
   getToken = async (): Promise<string> => {
     if (this.tokenIsFresh()) return this.token as string;
