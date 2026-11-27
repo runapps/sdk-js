@@ -558,7 +558,9 @@ const saved = await client.files.put(`videos/${task.id}.mp4`, data, { contentTyp
 
 ### Faces in Seedance references
 
-Seedance refuses a reference picture with a realistic face. For users the platform has enabled it for, `client.assets.verify(url)` puts the picture into the platform's Seedance asset library (Volcengine reviews it in a few seconds) and returns an `asset://` URI that Seedance takes in the picture's place:
+Seedance refuses a reference picture with a realistic face. For users the platform has enabled it for (`seedance_asset_verify` in `client.me().features`), a Seedance call does this by itself: every picture in `first_frame_url`, `last_frame_url` and `reference_image_urls` is checked, and one with a face is sent to Seedance as its asset, so an app just sends its pictures. The call fails only when Volcengine's review refuses a picture (`rejected`, 422) or the library is too busy to take it (`busy`, 429, with `Retry-After`); a picture that cannot be checked goes as it was. For other users nothing changes.
+
+To check a picture before the call (to tell the user early, or to keep the `asset://` yourself), `client.assets.verify(url)` puts the picture into the platform's Seedance asset library (Volcengine reviews it in a few seconds) and returns an `asset://` URI that Seedance takes in the picture's place:
 
 ```ts
 const me = await client.me();                       // { id, name, features }
