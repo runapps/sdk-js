@@ -84,6 +84,31 @@ export interface VideoTask {
   id: string;
   status: string;
   usage: Usage;
+  /**
+   * Seedance, for users with `seedance_asset_verify`: what the platform's
+   * automatic face check did with each picture of the call, in request
+   * order. Absent for other models and other users.
+   */
+  asset_verify?: AssetVerifyEntry[];
+}
+
+/** One picture of a Seedance call, as the automatic face check left it. */
+export interface AssetVerifyEntry {
+  /** `first_frame_url`, `last_frame_url` or `reference_image_urls[i]`. */
+  field: string;
+  /**
+   * `active`: a face, sent as `asset` (`cached`: the library already held it);
+   * `no_face`: sent as it was; `provided`: you sent an `asset://` yourself;
+   * `unverified`: could not be checked (`code`, `error`), sent as it was;
+   * `rejected` / `busy`: the failure that stopped the call (only in the error).
+   */
+  status: "active" | "no_face" | "provided" | "unverified" | "rejected" | "busy";
+  asset?: string;
+  asset_id?: string;
+  faces: number;
+  cached?: boolean;
+  code?: string;
+  error?: string;
 }
 
 export interface VideoUsageTokens {

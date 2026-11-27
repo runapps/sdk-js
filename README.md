@@ -560,6 +560,18 @@ const saved = await client.files.put(`videos/${task.id}.mp4`, data, { contentTyp
 
 Seedance refuses a reference picture with a realistic face. For users the platform has enabled it for (`seedance_asset_verify` in `client.me().features`), a Seedance call does this by itself: every picture in `first_frame_url`, `last_frame_url` and `reference_image_urls` is checked, and one with a face is sent to Seedance as its asset, so an app just sends its pictures. The call fails only when Volcengine's review refuses a picture (`rejected`, 422) or the library is too busy to take it (`busy`, 429, with `Retry-After`); a picture that cannot be checked goes as it was. For other users nothing changes.
 
+The task says what was done with each picture:
+
+```ts
+const task = await client.video.generate("Seedance 2.5", { prompt: "…", first_frame_url: photo, reference_image_urls: [a, b] });
+task.asset_verify;
+// [{ field: "first_frame_url",         status: "active",  asset: "asset://asset-…", faces: 1, cached: true },
+//  { field: "reference_image_urls[0]", status: "no_face", faces: 0 },
+//  { field: "reference_image_urls[1]", status: "unverified", code: "invalid_image", error: "…", faces: 0 }]
+```
+
+`active` went as its asset, `no_face` and `unverified` went as they were, `provided` was an `asset://` you sent. A stopped call's error names the picture (`Seedance asset verification (reference_image_urls[1]): …`).
+
 To check a picture before the call (to tell the user early, or to keep the `asset://` yourself), `client.assets.verify(url)` puts the picture into the platform's Seedance asset library (Volcengine reviews it in a few seconds) and returns an `asset://` URI that Seedance takes in the picture's place:
 
 ```ts

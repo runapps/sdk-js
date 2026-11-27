@@ -175,6 +175,7 @@ export {
 export type {
   VideoGenerateParams,
   VideoTask,
+  AssetVerifyEntry,
   VideoStatus,
   VideoUsageTokens,
   WaitOptions,
